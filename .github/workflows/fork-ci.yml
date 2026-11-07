@@ -1,0 +1,63 @@
+name: Fork CI
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_call:
+    inputs:
+      revision:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: Fork validation
+    if: github.repository == 'Driftward-LLC/paperclip'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI: 'true'
+      PAPERCLIP_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: python3 -m pip install PyYAML==6.0.2
+      - name: Workflow policy tests
+        run: python3 -m unittest discover -s scripts/fork-ci -p 'test_*.py'
+      - name: Inherited workflow contracts
+        run: |
+          node --test \
+            scripts/__tests__/e2e-shard.test.mjs \
+            scripts/__tests__/eval-schedule-monitor.test.mjs \
+            scripts/__tests__/prepare-runner-release-image.test.mjs \
+            scripts/__tests__/public-install-closure.test.mjs \
+            scripts/__tests__/release-verify-workflow.test.mjs \
+            scripts/__tests__/run-vitest-stable-shard.test.mjs \
+            scripts/__tests__/runner-debug-crate-cache.test.mjs \
+            scripts/__tests__/runner-release-crate-cache.test.mjs \
+            scripts/__tests__/storybook-deploy.test.mjs \
+            scripts/ci/test-selection-pr-timings.test.mjs \
+            scripts/ci/test-selection-timings.test.mjs \
+            scripts/ci/test-selection-workflow.test.mjs \
+            scripts/cloud-migrator-artifacts.test.mjs \
+            scripts/cloud-source-verification.test.mjs \
+            scripts/preview-artifacts.test.mjs \
+            scripts/release-lib.test.mjs \
+            scripts/reuse-canary-image.test.mjs
+      - name: Build workspace
+        run: pnpm build
+      - name: Typecheck every workspace
+        run: pnpm -r typecheck
+      - name: Full unit suite
+        run: pnpm test:run

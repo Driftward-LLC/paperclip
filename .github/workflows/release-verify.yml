@@ -25,14 +25,14 @@ on:
 # The organization group also restricts these workflow files to master.
 jobs:
   runner_chaos_evals:
-    if: ${{ !inputs.runner_binaries_only }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}
     name: Pre-release Runner chaos evals
     uses: ./.github/workflows/runner-chaos-evals.yml
     with:
       ref: ${{ inputs.ref }}
 
   typecheck:
-    if: ${{ !inputs.runner_binaries_only }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}
     name: Typecheck
     runs-on: ${{ vars.AWS_POST_MERGE_CI_ENABLED == 'true' && github.run_attempt >= 1 && github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha != '' && inputs.ref == github.sha && 'runs-on/fleet=paperclip-post-merge-x64/env=public-ci' || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -118,7 +118,7 @@ jobs:
         run: pnpm -r typecheck
 
   general_tests:
-    if: ${{ !inputs.runner_binaries_only }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}
     name: General tests (${{ matrix.group_label }})
     runs-on: ${{ vars.AWS_POST_MERGE_CI_ENABLED == 'true' && github.run_attempt >= 1 && github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha != '' && inputs.ref == github.sha && 'runs-on/fleet=paperclip-post-merge-x64/env=public-ci' || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -230,7 +230,7 @@ jobs:
           fi
 
   serialized_tests:
-    if: ${{ !inputs.runner_binaries_only }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}
     name: Serialized tests (${{ matrix.shard_label }})
     runs-on: ${{ vars.AWS_POST_MERGE_CI_ENABLED == 'true' && github.run_attempt >= 1 && github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha != '' && inputs.ref == github.sha && 'runs-on/fleet=paperclip-post-merge-x64/env=public-ci' || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -280,7 +280,7 @@ jobs:
         run: pnpm test:run:serialized -- --shard-index ${{ matrix.shard_index }} --shard-count ${{ matrix.shard_count }}
 
   runner_workflow_evals:
-    if: ${{ !inputs.runner_binaries_only }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}
     name: Runner workflow eval scorer contract
     runs-on: ${{ vars.AWS_POST_MERGE_CI_ENABLED == 'true' && github.run_attempt >= 1 && github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha != '' && inputs.ref == github.sha && 'runs-on/fleet=paperclip-post-merge-x64/env=public-ci' || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -311,7 +311,7 @@ jobs:
         run: pnpm test:runner-workflow-evals
 
   verify_paperclip_runner:
-    if: ${{ !inputs.runner_binaries_only }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}
     name: Verify Paperclip Runner (${{ matrix.lane }})
     runs-on: ${{ vars.AWS_POST_MERGE_CI_ENABLED == 'true' && github.run_attempt >= 1 && github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha != '' && inputs.ref == github.sha && 'runs-on/fleet=paperclip-post-merge-x64/env=public-ci' || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -527,7 +527,7 @@ jobs:
           key: runner-release-crate-v1-${{ steps.runner_release_crate_key.outputs.scope }}-${{ hashFiles('packages/paperclip-runner/rust-toolchain.toml', 'packages/paperclip-runner/acpx-profiles.json', 'packages/paperclip-runner/antigravity-distributions.json', 'packages/paperclip-runner/runner/Cargo.toml', 'packages/paperclip-runner/runner/Cargo.lock', 'packages/paperclip-runner/runner/crates/**', 'packages/paperclip-runner/protocol/**', 'packages/paperclip-runner/test-fixtures/**', 'packages/paperclip-runner/test/fixtures/**', 'tests/runner-e2e/fixtures/**') }}
 
   build:
-    if: ${{ !inputs.runner_binaries_only }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}
     name: Build
     runs-on: ${{ vars.AWS_POST_MERGE_CI_ENABLED == 'true' && github.run_attempt >= 1 && github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha != '' && inputs.ref == github.sha && 'runs-on/fleet=paperclip-post-merge-x64/env=public-ci' || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -558,7 +558,7 @@ jobs:
         run: pnpm build
 
   runner_binary_targets:
-    if: inputs.runner_binaries_only
+    if: ${{ github.repository == 'paperclipai/paperclip' && (inputs.runner_binaries_only) }}
     name: Read exact-source daemon targets
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -622,7 +622,7 @@ jobs:
           NODE
 
   runner_binaries:
-    if: inputs.runner_binaries_only
+    if: ${{ github.repository == 'paperclipai/paperclip' && (inputs.runner_binaries_only) }}
     needs: runner_binary_targets
     name: Release daemon (${{ matrix.target }})
     runs-on: ${{ matrix.host }}

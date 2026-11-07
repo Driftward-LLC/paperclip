@@ -12,7 +12,7 @@ const block = (job) => workflow.split(`\n  ${job}:\n`)[1].split(/\n  [a-z0-9_]+:
 const plan = planTasks({ config: JSON.parse(readFileSync("turbo.json", "utf8")),
   lanes: JSON.parse(readFileSync(".github/ci-task-matrix.json", "utf8")), paths: ["ui/src/pages/Inbox.tsx"] });
 const evaluate = (expression, needs, cancelled = false) => vm.runInNewContext(expression, {
-  needs, fromJSON: JSON.parse, toJSON: JSON.stringify, always: () => true, cancelled: () => cancelled,
+  github: { repository: "paperclipai/paperclip" }, needs, fromJSON: JSON.parse, toJSON: JSON.stringify, always: () => true, cancelled: () => cancelled,
 });
 
 test("failed, timed-out, skipped and unavailable selectors leave the original matrix runnable", () => {
@@ -23,6 +23,8 @@ test("failed, timed-out, skipped and unavailable selectors leave the original ma
     const condition = job.match(/if: \$\{\{ (.*) \}\}/)[1];
     const matrix = job.match(/matrix: \$\{\{ (.*) \}\}/)[1];
     assert.equal(evaluate(condition, needs), true, result);
+    assert.equal(vm.runInNewContext(condition, { github: { repository: "Driftward-LLC/paperclip" } }), false,
+      "inherited upstream runners must stay disabled in this fork");
     assert.deepEqual(JSON.parse(JSON.stringify(evaluate(matrix, needs))), plan.jobs.general_tests.matrix);
     assert.equal(evaluate(condition, needs, true), false, "cancellation must not start more runners");
   }

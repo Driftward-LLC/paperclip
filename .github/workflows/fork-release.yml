@@ -1,0 +1,96 @@
+name: Fork Docker release
+on:
+  push:
+    tags: ['driftward-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Must match the driftward-vVERSION tag selected in Run workflow'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: fork-docker-release
+  cancel-in-progress: false
+jobs:
+  source:
+    if: github.repository == 'Driftward-LLC/paperclip' && (github.event_name == 'push' || startsWith(github.ref, 'refs/tags/driftward-v'))
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve protected tag and require master ancestry
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          [[ "$RELEASE_TAG" =~ ^driftward-v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?$ ]]
+          sha=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          git merge-base --is-ancestor "$sha" origin/master
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_TAG#driftward-}" >> "$GITHUB_OUTPUT"
+  checks:
+    needs: source
+    uses: ./.github/workflows/fork-ci.yml
+    with:
+      revision: ${{ needs.source.outputs.sha }}
+  publish:
+    needs: [source, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: fork-release
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/driftward-llc/paperclip
+      VERSION: ${{ needs.source.outputs.version }}
+      REVISION: ${{ needs.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - name: Free hosted runner disk for source image and loaded artifact
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          docker system prune -af
+          df -h
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse existing version and SHA tags using authenticated package metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/fork-ci/release-preflight.py
+      - name: Build exact checked source without publishing
+        run: |
+          docker buildx build --platform linux/amd64 --target production --load \
+            --build-arg "PAPERCLIP_BUILD_VERSION=$VERSION" \
+            --build-arg "PAPERCLIP_BUILD_COMMIT=$REVISION" \
+            --label "org.opencontainers.image.source=https://github.com/Driftward-LLC/paperclip" \
+            --label "org.opencontainers.image.revision=$REVISION" \
+            --tag "$IMAGE:$VERSION" .
+      - name: Smoke fresh image without agents or host data
+        run: bash scripts/fork-ci/image-smoke.sh "$IMAGE:$VERSION"
+      - name: Publish checked and smoke-tested image
+        run: |
+          set -euo pipefail
+          docker tag "$IMAGE:$VERSION" "$IMAGE:sha-$REVISION"
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:sha-$REVISION"
+          digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{.Manifest.Digest}}')
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf '### Fork image release\n\nSource: `%s`\n\nPull: `%s@%s`\n' "$REVISION" "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"

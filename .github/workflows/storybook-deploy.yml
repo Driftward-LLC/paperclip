@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   authorize:
+    if: github.repository == 'paperclipai/paperclip'
     name: Authorize Storybook publisher
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -62,6 +63,7 @@ jobs:
             core.setOutput('branch', branch);
 
   build:
+    if: github.repository == 'paperclipai/paperclip'
     name: Build selected branch Storybook
     permissions: {}
     needs: authorize
@@ -113,6 +115,7 @@ jobs:
           retention-days: 7
 
   deploy:
+    if: github.repository == 'paperclipai/paperclip'
     name: Publish branch Storybook to S3
     needs: [authorize, build]
     runs-on: ubuntu-latest

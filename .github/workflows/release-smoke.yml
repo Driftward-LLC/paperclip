@@ -57,7 +57,7 @@ jobs:
   # on the runner VM's systemd and require the installed service to end up
   # serving.
   smoke_service:
-    if: inputs.qualification_source_sha == ''
+    if: ${{ github.repository == 'paperclipai/paperclip' && (inputs.qualification_source_sha == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -111,7 +111,7 @@ jobs:
           retention-days: 14
 
   smoke:
-    if: inputs.qualification_source_sha == ''
+    if: ${{ github.repository == 'paperclipai/paperclip' && (inputs.qualification_source_sha == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -214,14 +214,14 @@ jobs:
         run: docker rm -f "$SMOKE_CONTAINER_NAME" >/dev/null 2>&1 || true
 
   qualification_daemons:
-    if: inputs.qualification_source_sha != ''
+    if: ${{ github.repository == 'paperclipai/paperclip' && (inputs.qualification_source_sha != '') }}
     uses: ./.github/workflows/release-verify.yml
     with:
       ref: ${{ inputs.qualification_source_sha }}
       runner_binaries_only: true
 
   qualification_pack:
-    if: inputs.qualification_source_sha != ''
+    if: ${{ github.repository == 'paperclipai/paperclip' && (inputs.qualification_source_sha != '') }}
     needs: qualification_daemons
     name: Assemble and verify public Linux packages
     runs-on: ubuntu-latest
@@ -295,7 +295,7 @@ jobs:
           retention-days: 14
 
   qualification_native:
-    if: ${{ !cancelled() && inputs.qualification_source_sha != '' && needs.qualification_daemons.result == 'success' }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (!cancelled() && inputs.qualification_source_sha != '' && needs.qualification_daemons.result == 'success') }}
     needs: [qualification_daemons, qualification_pack]
     name: Clean installed package (${{ matrix.target }})
     runs-on: ${{ matrix.host }}

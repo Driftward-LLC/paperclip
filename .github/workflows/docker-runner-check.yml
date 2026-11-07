@@ -54,7 +54,7 @@ concurrency:
 
 jobs:
   runner:
-    if: github.event_name == 'pull_request'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.event_name == 'pull_request') }}
     name: Compile isolated native Runner
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -78,7 +78,7 @@ jobs:
 
 
   authorize_manual:
-    if: github.event_name == 'workflow_dispatch'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -126,6 +126,7 @@ jobs:
           echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
 
   manual_image:
+    if: github.repository == 'paperclipai/paperclip'
     name: Build and verify on Linux
     needs: authorize_manual
     # Keep maintainer authorization below; use a native hosted Linux builder.

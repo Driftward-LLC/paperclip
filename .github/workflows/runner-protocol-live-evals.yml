@@ -62,7 +62,7 @@ concurrency:
 jobs:
   authorize:
     name: Authorize paid direct eval campaign
-    if: github.event_name != 'schedule' || vars.RUNNER_PROTOCOL_EVAL_NIGHTLY_ENABLED == 'true'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.event_name != 'schedule' || vars.RUNNER_PROTOCOL_EVAL_NIGHTLY_ENABLED == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -213,6 +213,7 @@ jobs:
           fi
 
   target_lock:
+    if: github.repository == 'paperclipai/paperclip'
     name: Resolve target pnpm lockfile
     needs: authorize
     runs-on: ubuntu-latest
@@ -266,7 +267,7 @@ jobs:
   testops_selection:
     name: Bind the current TestOps protocol selection before provider work
     needs: authorize
-    if: needs.authorize.outputs.testops_enabled == 'true'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.authorize.outputs.testops_enabled == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     environment: runner-e2e-testops-reporting
@@ -325,7 +326,7 @@ jobs:
   catalog:
     name: Pin and fan out the direct Evalbook roster
     needs: [authorize, testops_selection]
-    if: always() && needs.authorize.result == 'success' && (needs.testops_selection.result == 'success' || needs.testops_selection.result == 'skipped')
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && needs.authorize.result == 'success' && (needs.testops_selection.result == 'success' || needs.testops_selection.result == 'skipped')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -435,6 +436,7 @@ jobs:
           if-no-files-found: error
 
   build_runner:
+    if: github.repository == 'paperclipai/paperclip'
     name: Build portable direct-eval runner once
     needs: [authorize, target_lock, catalog]
     runs-on: ${{ needs.authorize.outputs.test_runner }}
@@ -544,6 +546,7 @@ jobs:
           if-no-files-found: error
 
   build_controller:
+    if: github.repository == 'paperclipai/paperclip'
     name: Build trusted controller without private archive access
     needs: [authorize]
     runs-on: ubuntu-latest
@@ -614,6 +617,7 @@ jobs:
         run: node --test .github/tests/runner-controller-artifact-transport.test.mjs
 
   prepare_controller:
+    if: github.repository == 'paperclipai/paperclip'
     name: Prepare one shared cost and trace manifest
     needs: [authorize, catalog, build_runner, build_controller]
     runs-on: ubuntu-latest
@@ -749,6 +753,7 @@ jobs:
         run: node "$RUNNER_TEMP/runner-protocol-runtime/private-history.mjs" upload protocol-control "$GITHUB_RUN_ID" "$RUNNER_TEMP/runner-protocol-control"
 
   eval_shard_0:
+    if: github.repository == 'paperclipai/paperclip'
     name: Direct eval ${{ matrix.rosterId }} / ${{ matrix.caseId }}
     needs: [authorize, catalog, build_runner, prepare_controller]
     runs-on: ${{ needs.authorize.outputs.test_runner }}
@@ -1075,7 +1080,7 @@ jobs:
 
   eval_shard_1:
     name: Direct eval ${{ matrix.rosterId }} / ${{ matrix.caseId }}
-    if: needs.catalog.outputs.matrix_1_present == 'true'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.catalog.outputs.matrix_1_present == 'true') }}
     needs: [authorize, catalog, build_runner, prepare_controller]
     runs-on: ${{ needs.authorize.outputs.test_runner }}
     timeout-minutes: 18
@@ -1092,7 +1097,7 @@ jobs:
 
   report:
     name: Merge attempts and render canonical Evalbook
-    if: always() && !cancelled() && needs.catalog.result == 'success' && needs.build_runner.result == 'success' && needs.prepare_controller.result == 'success'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && needs.catalog.result == 'success' && needs.build_runner.result == 'success' && needs.prepare_controller.result == 'success') }}
     needs: [authorize, testops_selection, catalog, build_runner, prepare_controller, eval_shard_0, eval_shard_1]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1393,7 +1398,7 @@ jobs:
 
   testops_report:
     name: Publish and verify every selected protocol result in TestOps
-    if: always() && !cancelled() && needs.authorize.outputs.testops_enabled == 'true' && needs.testops_selection.result == 'success'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && needs.authorize.outputs.testops_enabled == 'true' && needs.testops_selection.result == 'success') }}
     needs: [authorize, testops_selection, catalog, build_runner, prepare_controller, eval_shard_0, eval_shard_1, report]
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -1460,7 +1465,7 @@ jobs:
   publish_history:
     name: Publish immutable Evalbook and mutable campaign index
     needs: [authorize, catalog, report]
-    if: always() && needs.report.outputs.public_report_ready == 'true'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && needs.report.outputs.public_report_ready == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:

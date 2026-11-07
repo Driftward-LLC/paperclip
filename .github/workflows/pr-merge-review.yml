@@ -37,16 +37,7 @@ jobs:
     # workflow runs, the same results from non-Actions check providers (GitHub
     # Actions app 15368 checks arrive through workflow_run), and successful
     # commit statuses. One PR push previously queued about 60 runner jobs.
-    if: >-
-      github.repository == 'paperclipai/paperclip' &&
-      ((github.event_name == 'workflow_run' &&
-        (github.event.workflow_run.event == 'pull_request' ||
-          github.event.workflow_run.event == 'pull_request_target') &&
-        contains(fromJSON('["success","skipped","neutral"]'), github.event.workflow_run.conclusion)) ||
-      (github.event_name == 'check_run' &&
-        github.event.check_run.app.id != 15368 &&
-        contains(fromJSON('["success","skipped","neutral"]'), github.event.check_run.conclusion)) ||
-      (github.event_name == 'status' && github.event.state == 'success'))
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.repository == 'paperclipai/paperclip' && ((github.event_name == 'workflow_run' && (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'pull_request_target') && contains(fromJSON('["success","skipped","neutral"]'), github.event.workflow_run.conclusion)) || (github.event_name == 'check_run' && github.event.check_run.app.id != 15368 && contains(fromJSON('["success","skipped","neutral"]'), github.event.check_run.conclusion)) || (github.event_name == 'status' && github.event.state == 'success'))) }}
     # Collapse bursts for one PR head to the latest event. The notifier reads
     # the current PR state, so the newest event subsumes older ones. Job-level
     # concurrency keeps skipped events from cancelling a scheduled notifier.

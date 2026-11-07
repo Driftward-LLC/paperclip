@@ -83,7 +83,7 @@ test("source proof gates publication without occupying a publication runner", ()
     ["refs/heads/master", "false", "success", true],
     ["refs/heads/master", "false", "failure", false],
     ["refs/tags/v1", undefined, "skipped", true],
-    ["refs/heads/master", undefined, "skipped", true, "fork/paperclip", "123"],
+    ["refs/heads/master", undefined, "skipped", false, "fork/paperclip", "123"],
     ["refs/heads/master", undefined, "skipped", true, "paperclipai/paperclip", "123"],
   ]) {
     const canonical = repository === "paperclipai/paperclip" && repository_id === "1170821064" && ref === "refs/heads/master";
@@ -132,7 +132,7 @@ test("canary can admit deferred exact-source checks while stable keeps full veri
   // once; verification must consume that pin, not re-resolve the ref.
   assert.match(
     releaseWorkflow,
-    /verify_stable:\n\s+if: github\.event_name == 'workflow_dispatch' && inputs\.channel == 'stable'\n(?:\s+needs: [^\n]+\n)?\s+uses: \.\/\.github\/workflows\/release-verify\.yml\n\s+with:\n\s+ref: \$\{\{ needs\.preflight_stable\.outputs\.sha \}\}/,
+    /verify_stable:\n\s+if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(github\.event_name == 'workflow_dispatch' && inputs\.channel == 'stable'\) \}\}\n(?:\s+needs: [^\n]+\n)?\s+uses: \.\/\.github\/workflows\/release-verify\.yml\n\s+with:\n\s+ref: \$\{\{ needs\.preflight_stable\.outputs\.sha \}\}/,
   );
   assert.doesNotMatch(
     releaseWorkflow,
@@ -311,7 +311,7 @@ test("candidate-branch betas are validated and fully verified before publish", (
   assert.match(releaseWorkflow, /candidate\/beta-\*\)/);
   assert.match(
     releaseWorkflow,
-    /verify_beta_candidate:\n\s+needs: select_beta\n\s+if: needs\.select_beta\.outputs\.mode == 'candidate'\n\s+uses: \.\/\.github\/workflows\/release-verify\.yml/,
+    /verify_beta_candidate:\n\s+needs: select_beta\n\s+if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(needs\.select_beta\.outputs\.mode == 'candidate'\) \}\}\n\s+uses: \.\/\.github\/workflows\/release-verify\.yml/,
   );
   assert.match(
     releaseWorkflow,
@@ -328,7 +328,7 @@ test("post-publish beta smoke survives the skipped candidate-verification ancest
   // silently skips the smoke. The condition must stay explicit.
   assert.match(
     releaseWorkflow,
-    /smoke_beta:\n\s+needs: publish_beta\n\s+if: \$\{\{ !cancelled\(\) && needs\.publish_beta\.result == 'success' && !inputs\.dry_run \}\}/,
+    /smoke_beta:\n\s+needs: publish_beta\n\s+if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(!cancelled\(\) && needs\.publish_beta\.result == 'success' && !inputs\.dry_run\) \}\}/,
   );
 });
 
@@ -341,18 +341,18 @@ test("published canaries are gated by the exact-version onboarding browser smoke
   );
   assert.match(
     releaseWorkflow,
-    /smoke_canary_onboarding:\n\s+needs: publish_canary\n\s+if: \$\{\{ !cancelled\(\) && needs\.publish_canary\.result == 'success' \}\}/,
+    /smoke_canary_onboarding:\n\s+needs: publish_canary\n\s+if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(!cancelled\(\) && needs\.publish_canary\.result == 'success'\) \}\}/,
   );
   const smoke = releaseWorkflow.split("  smoke_canary_onboarding:\n")[1].split(/\n  [a-z_]+:\n/)[0];
   const condition = smoke.match(/^    if: \$\{\{ (.+) \}\}$/m)?.[1];
-  assert.match(condition, /^!cancelled\(\) && needs\.publish_canary\.result == 'success'$/);
+  assert.match(condition, /^github\.repository == 'paperclipai\/paperclip' && \(!cancelled\(\) && needs\.publish_canary\.result == 'success'\)$/);
   for (const [result, cancelled, expected] of [
     ["success", false, true], ["failure", false, false],
     ["cancelled", false, false], ["skipped", false, false], ["success", true, false],
   ]) {
     const needs = { publish_canary: { result }, release_runner_source: { result: "success" },
       select_nightly: { result: "skipped" }, select_beta: { result: "skipped" }, preflight_stable: { result: "skipped" } };
-    assert.equal(runInNewContext(condition, { cancelled: () => cancelled, needs }), expected,
+    assert.equal(runInNewContext(condition, { github: { repository: "paperclipai/paperclip" }, cancelled: () => cancelled, needs }), expected,
       `Canary smoke: publisher=${result}, cancelled=${cancelled}`);
   }
   assert.match(
@@ -682,7 +682,7 @@ test("Runner eval workflows pin actions and gate paid live execution", () => {
       for (const id of ["chat", "chat_external"]) {
         const block = workflow.split(`  ${id}:\n`)[1].split(/\n  [a-z_]+:\n/)[0];
         const assertCaller = block => {
-        assert.match(block, /if: needs\.authorize\.outputs\.operation == 'evaluate'/);
+        assert.match(block, /if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(needs\.authorize\.outputs\.operation == 'evaluate'/);
         assert.ok(block.includes(`needs.select.outputs.${id === "chat" ? "native" : "external"}_count != '0'`));
         assert.match(block, /needs: \[authorize, select, build\]/);
         assert.match(block, /uses: \.\/\.github\/workflows\/chat-catalog-testops-case\.yml/);
@@ -910,7 +910,7 @@ test("release daemon production uses exact-source native hosts and no publisher 
   assert.match(runner.scripts['build:binary'], /&& node scripts\/stage-runner-binary.mjs$/);
   assert.match(producer, /stage-release-runner-binaries.mjs record/);
   for (const job of ["runner_chaos_evals", "typecheck", "general_tests", "serialized_tests", "runner_workflow_evals", "verify_paperclip_runner", "build"]) {
-    assert.ok(workflow.includes(`${job}:\n    if: \${{ !inputs.runner_binaries_only }}`));
+    assert.ok(workflow.includes(`${job}:\n    if: \${{ github.repository == 'paperclipai/paperclip' && (!inputs.runner_binaries_only) }}`));
   }
   const release = readWorkflow("release.yml");
   const source = release.split("  release_runner_source:\n")[1].split(/\n  [a-z_]+:\n/)[0];
@@ -921,7 +921,7 @@ test("release daemon production uses exact-source native hosts and no publisher 
   assert.match(binaries, /ref: \$\{\{ needs\.release_runner_source\.outputs\.sha \}\}/);
   assert.match(binaries, /runner_binaries_only: true/);
   const condition = binaries.match(/^    if: (.+)$/m)?.[1].replace(/^\$\{\{\s*|\s*\}\}$/g, "");
-  assert.match(condition, /^!cancelled\(\) && needs\.release_runner_source\.result == 'success' && needs\.release_runner_source\.outputs\.required == 'true'$/,
+  assert.match(condition, /^github\.repository == 'paperclipai\/paperclip' && \(!cancelled\(\) && needs\.release_runner_source\.result == 'success' && needs\.release_runner_source\.outputs\.required == 'true'\)$/,
     "Native compilation must bypass deliberately skipped channel ancestors and require successful exact-source selection");
   const laneJobs = ["verify_canary", "select_nightly", "select_beta", "preflight_stable"];
   for (const activeLane of laneJobs) {
@@ -934,7 +934,7 @@ test("release daemon production uses exact-source native hosts and no publisher 
       const needs = Object.fromEntries(laneJobs.map(job => [job, { result: job === activeLane ? "success" : "skipped" }]));
       needs.release_runner_source = { result, outputs: { required } };
       assert.equal(Object.values(needs).filter(job => job.result === "skipped").length, result === "skipped" ? 4 : 3);
-      assert.equal(runInNewContext(condition, { cancelled: () => cancelled, needs }), expected,
+      assert.equal(runInNewContext(condition, { github: { repository: "paperclipai/paperclip" }, cancelled: () => cancelled, needs }), expected,
         `${activeLane}: source=${result}, required=${required}, cancelled=${cancelled}`);
     }
   }
@@ -1122,8 +1122,8 @@ test('canceling native preparation retires both supervisors and their descendant
 
 test("premerge native qualification consumes the same Linux-packed npm bytes without publishing", () => {
   const smoke = readWorkflow("release-smoke.yml");
-  assert.match(smoke, /smoke_service:\n\s+if: inputs.qualification_source_sha == ''/);
-  assert.match(smoke, /smoke:\n\s+if: inputs.qualification_source_sha == ''/);
+  assert.match(smoke, /smoke_service:\n\s+if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(inputs.qualification_source_sha == ''\) \}\}/);
+  assert.match(smoke, /smoke:\n\s+if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(inputs.qualification_source_sha == ''\) \}\}/);
   const qualification = smoke.split("  qualification_daemons:\n")[1];
   assert.doesNotMatch(qualification, /secrets\.|npm publish|id-token: write|contents: write|continue-on-error/);
   assert.match(qualification, /runner_binaries_only: true/);

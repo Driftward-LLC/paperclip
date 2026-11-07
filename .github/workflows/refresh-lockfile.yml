@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   refresh:
+    if: github.repository == 'paperclipai/paperclip'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Holds the lockfile bot key. Restrict this environment to master so no

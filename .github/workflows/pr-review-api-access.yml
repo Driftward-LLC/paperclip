@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   probe:
-    if: github.repository == 'paperclipai/paperclip'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.repository == 'paperclipai/paperclip') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # This job has no environment or private webhook secrets. It proves that

@@ -13,9 +13,7 @@ permissions:
 jobs:
   export:
     if: >-
-      github.repository == 'paperclipai/paperclip' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      startsWith(github.event.workflow_run.display_title, 'CI profile · PR #')
+      ${{ github.repository == 'paperclipai/paperclip' && (github.repository == 'paperclipai/paperclip' && github.event.workflow_run.event == 'pull_request' && startsWith(github.event.workflow_run.display_title, 'CI profile · PR #')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # This environment permits only the master branch. Do not use a repository
