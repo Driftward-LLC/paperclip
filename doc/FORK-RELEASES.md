@@ -23,8 +23,11 @@ access to its GHCR package. Keep unrelated secrets out of the repository/environ
 Before the bootstrap PR, leave all inherited workflow IDs disabled, especially
 scheduled, release, cloud, agent-runtime, and privileged PR workflows. Enabling
 Actions globally on an old default branch can activate inherited schedules before
-this PR merges. Enable only Fork CI for bootstrap; after merge confirm the only
-fork-executable definitions are `fork-ci.yml` and `fork-release.yml`.
+this PR merges. Enable only Fork CI for bootstrap; workflows may register
+only after the first PR event. During this fork's bootstrap, 13 inherited IDs
+registered and were explicitly disabled; do not infer registration from source
+files alone. After merge confirm the only fork-executable definitions are
+`fork-ci.yml` and `fork-release.yml`.
 
 ## Branch, review, and merge
 
@@ -34,6 +37,16 @@ pnpm 9.15.4 using `pnpm install --frozen-lockfile`. Run `pnpm build`,
 `python3 -m unittest discover -s scripts/fork-ci -p 'test_*.py'`.
 Fork validation additionally runs all 17 inherited Node test files referencing
 workflow definitions, preserving their upstream assertions alongside fork guards.
+CI builds/typechecks once, then runs every row from the checked-in upstream
+unit matrix: currently 19 general and nine serialized partitions, with at most
+six test runners in parallel. The workflow retains the name `Fork CI`; upstream's
+`PR` special case would remove native suites from server partitions. Only generated
+package outputs and synthetic native test executables are shared by artifact ID
+within the same run and revision. Tests install locked dependencies separately;
+they do not repeat the whole workspace build. Two native suites still perform
+their own Cargo freshness/build checks. The final `Fork validation` aggregate
+requires preparation and every test partition to succeed, including reusable
+release invocations; failure, cancellation, and skipped jobs cannot pass.
 Install PyYAML 6.0.2 for the workflow policy tests. Rustup must be available;
 the runner package pins its Rust toolchain. Build goes first to materialize workspace exports used by typechecking/tests.
 Open a PR using the repository template; have Astra review the exact revision and
