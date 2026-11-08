@@ -67,6 +67,14 @@ class MatrixTest(unittest.TestCase):
         self.assertFalse(tests['strategy']['fail-fast'])
         self.assertEqual(workflow['name'], 'Fork CI')
         self.assertEqual(tests['strategy']['matrix'], '${{ fromJSON(needs.prepare.outputs.matrix) }}')
+        steps = tests['steps']
+        restore = next(i for i, step in enumerate(steps) if step.get('name') == 'Restore same-revision workspace outputs')
+        execute = next(i for i, step in enumerate(steps) if step.get('name') == 'Run this full-suite partition')
+        self.assertLess(restore, execute)
+        self.assertEqual(steps[execute]['env']['PAPERCLIP_TEST_PREBUILT_RUNNER'],
+                         '${{ github.workspace }}/packages/paperclip-runner/runner/target/release/paperclip-runnerd')
+        download = next(step for step in steps if step.get('uses', '').startswith('actions/download-artifact@'))
+        self.assertEqual(download['with']['artifact-ids'], '${{ needs.prepare.outputs.artifact }}')
 
     def test_artifact_contains_only_package_outputs_and_native_fixtures(self):
         artifact = module('build-artifact')

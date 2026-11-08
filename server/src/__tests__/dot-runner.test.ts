@@ -1,3 +1,4 @@
+import { prebuiltTestRunner } from "./helpers/prebuilt-test-runner.js";
 import { applyPendingMigrations } from "@paperclipai/db";
 import { resolveExternalTestDatabaseUrl } from "./helpers/external-test-database.js";
 import { createGrokRoutineDispatcher } from "../services/grok-bot/dispatcher.js";
@@ -58,13 +59,18 @@ describe("durable Dot Runner integration", () => {
   let root: string;
   beforeAll(async () => {
     const runnerRoot = fileURLToPath(new URL("../../../packages/paperclip-runner/", import.meta.url));
-    execFileSync("cargo", ["build", "--release", "--locked", "--manifest-path", join(runnerRoot, "runner/Cargo.toml"), "-p", "paperclip-runner-core", "--bin", "paperclip-runnerd"], { cwd: runnerRoot, stdio: "inherit", timeout: 300000 });
+    // Fork CI restores this exact checked revision's daemon by artifact ID.
+    // Local runs keep Cargo's freshness check unless explicitly given a binary.
+    const preparedRunner = prebuiltTestRunner(process.env.PAPERCLIP_TEST_PREBUILT_RUNNER);
+    if (!preparedRunner) {
+      execFileSync("cargo", ["build", "--release", "--locked", "--manifest-path", join(runnerRoot, "runner/Cargo.toml"), "-p", "paperclip-runner-core", "--bin", "paperclip-runnerd"], { cwd: runnerRoot, stdio: "inherit", timeout: 300000 });
+    }
     if (externalUrl) await applyPendingMigrations(externalUrl);
     else temporary = await startEmbeddedPostgresTestDatabase("paperclip-dot-runner-");
     db = createDb(externalUrl ?? temporary.connectionString);
     root = await mkdtemp(join(tmpdir(), "paperclip-dot-state-"));
     vi.stubEnv("PAPERCLIP_IN_WORKTREE", "false");
-    vi.stubEnv("PAPERCLIP_RUNNER_BINARY", join(runnerRoot, "runner/target/release", process.platform === "win32" ? "paperclip-runnerd.exe" : "paperclip-runnerd"));
+    vi.stubEnv("PAPERCLIP_RUNNER_BINARY", preparedRunner ?? join(runnerRoot, "runner/target/release", process.platform === "win32" ? "paperclip-runnerd.exe" : "paperclip-runnerd"));
     vi.stubEnv("PAPERCLIP_RUNNER_STATE_DIR", join(root, "runner-state"));
     vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY", randomBytes(32).toString("base64"));
     await instanceSettingsService(db).updateExperimental({ enablePublicMcp: true, enableOpenAiDot: true, enableNativeRunner: false });

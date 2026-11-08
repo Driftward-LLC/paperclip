@@ -43,8 +43,16 @@ six test runners in parallel. The workflow retains the name `Fork CI`; upstream'
 `PR` special case would remove native suites from server partitions. Only generated
 package outputs and synthetic native test executables are shared by artifact ID
 within the same run and revision. Tests install locked dependencies separately;
-they do not repeat the whole workspace build. Two native suites still perform
-their own Cargo freshness/build checks. The final `Fork validation` aggregate
+they do not repeat the whole workspace build. Native suites that need extra provider fixtures still perform
+their own Cargo freshness/build checks. The Dot suite uses the explicit test-only
+`PAPERCLIP_TEST_PREBUILT_RUNNER` path only after this same-revision artifact is
+restored; it checks that the path is absolute, readable, executable, and a regular
+file and fails if an explicitly supplied path is invalid. Executable permission
+checking is platform dependent: Node enforces `X_OK` on POSIX; on Windows it checks
+existence instead. The permission-specific regression runs on POSIX, while all
+invalid-path regressions run on every platform. Without that setting,
+local Dot tests retain their locked Cargo freshness build. This reuses the prepared
+daemon without repeating a cold Rust build in the test partition. The final `Fork validation` aggregate
 requires preparation and every test partition to succeed, including reusable
 release invocations; failure, cancellation, and skipped jobs cannot pass.
 Install PyYAML 6.0.2 for the workflow policy tests. Rustup must be available;

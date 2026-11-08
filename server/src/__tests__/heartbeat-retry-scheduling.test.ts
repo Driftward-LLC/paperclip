@@ -79,19 +79,6 @@ if (!embeddedPostgresSupport.supported) {
   );
 }
 
-async function waitForRunToFinish(
-  heartbeat: ReturnType<typeof heartbeatService>,
-  runId: string,
-  timeoutMs = 5_000,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const run = await heartbeat.getRun(runId);
-    if (run && !["queued", "running"].includes(run.status)) return run;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return await heartbeat.getRun(runId);
-}
 
 describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
   let db!: ReturnType<typeof createDb>;
@@ -351,7 +338,11 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     const run = await heartbeat.invoke(agentId, "on_demand", {}, "manual");
     expect(run).not.toBeNull();
 
-    const failedRun = await waitForRunToFinish(heartbeat, run!.id);
+    // invoke dispatches execution asynchronously. Join its actual completion,
+    // including terminal row writes, instead of returning a still-running row
+    // when an arbitrary polling deadline expires on a loaded runner.
+    await heartbeat.drainActiveRunExecutions();
+    const failedRun = await heartbeat.getRun(run!.id);
     expect(failedRun?.status).toBe("failed");
     expect(failedRun?.errorCode).toBe("provider_quota");
     expect((failedRun?.resultJson as Record<string, unknown> | null)?.errorFamily).toBe("provider_quota");
