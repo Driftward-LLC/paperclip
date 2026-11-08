@@ -374,6 +374,14 @@ describe.skipIf(!support.supported)("remote workspace save parent lock order", (
     });
     await ready.promise;
     const command = "printf 'effect\\n' >> provision-count.txt";
+    const commandReady = deferred(), commandRelease = deferred();
+    const execute = f.target.runner!.execute.bind(f.target.runner!);
+    f.target.runner!.execute = async input => {
+      if (input.command === "bash" && input.args?.[1] === command) {
+        commandReady.resolve(); await commandRelease.promise;
+      }
+      return execute(input);
+    };
     const provision = () => provisionRemoteWorkspace({ db: peerDb, companyId: f.companyId, workspaceId: f.workspace.id,
       runId: f.runId, epoch: authority.epoch, remoteCwd: authority.location!.remoteCwd, target: f.target, commands: [command] });
     const settle = <T,>(work: Promise<T>): Promise<PromiseSettledResult<T>> => work.then(
@@ -396,6 +404,14 @@ describe.skipIf(!support.supported)("remote workspace save parent lock order", (
       await expect.poll(async () => Boolean(await waiting("save-order-reverse-save")), { timeout: 5000 }).toBe(true);
       const saveWait = await waiting("save-order-reverse-save");
       release.resolve(); await barrier;
+      if (mode === "provision") {
+        await commandReady.promise;
+        // Test database lock ordering with provisioning in flight. A command
+        // changing files during capture is correctly refused by archive safety;
+        // the archive suite separately forces and verifies that refusal.
+        await saving;
+        commandRelease.resolve();
+      }
       const results = await Promise.all([saving, peer]);
       const errors = results.filter(result => result.status === "rejected").map(result =>
         (result as PromiseRejectedResult).reason as Error & { cause?: { code?: string; detail?: string; where?: string } });
@@ -421,7 +437,7 @@ describe.skipIf(!support.supported)("remote workspace save parent lock order", (
         if (mode === "provision") expect(await readFile(path.join(loaded.root, "provision-count.txt"), "utf8")).toBe("effect\n");
       } finally { await loaded.cleanup(); }
     } finally {
-      release.resolve(); await barrier; await Promise.all([saving, peer]);
+      release.resolve(); commandRelease.resolve(); await barrier; await Promise.all([saving, peer]);
       await saveDb.$client.end(); await peerDb.$client.end();
     }
   }, 30_000);
