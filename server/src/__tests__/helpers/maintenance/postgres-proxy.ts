@@ -5,6 +5,7 @@ export type ObservedQuery = { protocol: "simple" | "extended"; sql: string; fing
 
 export function createPostgresProtocolObserver(onQuery: (query: ObservedQuery) => void, onFrame: (type: string) => void = () => {}) {
   let frontend = Buffer.alloc(0), backend = Buffer.alloc(0), startup = true, ready = false, pending = 1;
+  let lastQuery: ObservedQuery | undefined, startupProtocol: number | undefined;
   const statements = new Map<string, string>(), portals = new Map<string, string>();
   function cstring(body: Buffer, offset = 0): [string, number] {
     const end = body.indexOf(0, offset);
@@ -12,10 +13,15 @@ export function createPostgresProtocolObserver(onQuery: (query: ObservedQuery) =
     return [body.toString("utf8", offset, end), end + 1];
   }
   function observe(protocol: ObservedQuery["protocol"], sql: string) {
-    onQuery({ protocol, sql, fingerprint: createHash("sha256").update(sql).digest("hex").slice(0, 16) });
+    lastQuery = { protocol, sql, fingerprint: createHash("sha256").update(sql).digest("hex").slice(0, 16) };
+    onQuery(lastQuery);
   }
   return {
     get pending() { return pending; },
+    get diagnostic() {
+      return { pending, ready, startup, startupProtocol, frontendBuffered: frontend.length, backendBuffered: backend.length,
+        lastQuery: lastQuery && { ...lastQuery, sql: lastQuery.sql.slice(0, 500) } };
+    },
     get ready() { return ready; },
     frontend(chunk: Buffer) {
       frontend = Buffer.concat([frontend, chunk]);
@@ -27,7 +33,7 @@ export function createPostgresProtocolObserver(onQuery: (query: ObservedQuery) =
         const frame = frontend.subarray(0, total);
         frontend = frontend.subarray(total);
         if (startup) {
-          const protocol = frame.readInt32BE(4);
+          const protocol = startupProtocol = frame.readInt32BE(4);
           if (protocol === 196608) startup = false;
           else if (protocol !== 80877103 && protocol !== 80877104 && protocol !== 80877102) throw new Error("Unsupported PostgreSQL startup protocol");
           continue;
@@ -72,6 +78,7 @@ export async function startMaintenancePostgresProxy(databaseUrl: string, capture
   const frames = { Query: 0, Parse: 0, Bind: 0, Execute: 0, Sync: 0, Terminate: 0 };
   const transport = { connectionsOpened: 0, connectionsClosed: 0, frontendBytes: 0, backendBytes: 0 };
   const sockets = new Set<Socket>(), observers = new Set<ReturnType<typeof createPostgresProtocolObserver>>();
+  const connectionDiagnostics = new Map<object, () => object>();
   const server = createServer(client => {
     transport.connectionsOpened++;
     client.once("close", () => { transport.connectionsClosed++; });
@@ -81,10 +88,11 @@ export async function startMaintenancePostgresProxy(databaseUrl: string, capture
       else if (type === "E") frames.Execute++; else if (type === "S") frames.Sync++; else if (type === "X") frames.Terminate++;
     });
     observers.add(observer);
+    connectionDiagnostics.set(observer, () => ({ client: { state: client.readyState, destroyed: client.destroyed, read: client.bytesRead, written: client.bytesWritten }, target: { state: target.readyState, destroyed: target.destroyed, read: target.bytesRead, written: target.bytesWritten } }));
     for (const socket of [client, target]) {
       sockets.add(socket);
       socket.on("error", error => { errors.push(error); client.destroy(); target.destroy(); });
-      socket.on("close", () => { sockets.delete(socket); if (client.destroyed && target.destroyed) observers.delete(observer); });
+      socket.on("close", () => { sockets.delete(socket); if (client.destroyed && target.destroyed) { observers.delete(observer); connectionDiagnostics.delete(observer); } });
     }
     client.on("data", chunk => { transport.frontendBytes += chunk.length; try { observer.frontend(chunk); } catch (error) { errors.push(error as Error); client.destroy(); target.destroy(); } });
     target.on("data", chunk => { transport.backendBytes += chunk.length; try { observer.backend(chunk); } catch (error) { errors.push(error as Error); client.destroy(); target.destroy(); } });
@@ -100,6 +108,11 @@ export async function startMaintenancePostgresProxy(databaseUrl: string, capture
     get frames() { return { ...frames }; },
     get transport() { return { ...transport }; },
     get pending() { return [...observers].reduce((sum, observer) => sum + observer.pending, 0); },
+    get pendingDiagnostics() {
+      const pendingObservers = [...observers].filter(observer => observer.pending !== 0);
+      return { count: pendingObservers.length, connections: pendingObservers.slice(0, 16)
+        .map(observer => ({ ...observer.diagnostic, transport: connectionDiagnostics.get(observer)?.() })) };
+    },
     get starting() { return [...observers].filter(observer => !observer.ready).length; },
     async stop() {
       for (const socket of sockets) socket.destroy();

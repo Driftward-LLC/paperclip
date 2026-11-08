@@ -28,7 +28,7 @@ import { drainHeartbeatRunsToQuiescence } from "./helpers/drain-heartbeat-runs.j
 import { createLifecycleDriver } from "../services/agent-lifecycle-driver.js";
 
 const mockAdapterExecute = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_input?: { runId: string }) => ({
     exitCode: 0,
     signal: null,
     timedOut: false,
@@ -52,15 +52,6 @@ vi.mock("../adapters/index.ts", async () => {
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
-
-async function waitForRun(db: ReturnType<typeof createDb>, runId: string) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const run = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).then((rows) => rows[0] ?? null);
-    if (run && run.status !== "queued" && run.status !== "running") return run;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).then((rows) => rows[0] ?? null);
-}
 
 async function deleteHeartbeatRunsAfterEvents(db: ReturnType<typeof createDb>) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -87,6 +78,13 @@ describeEmbeddedPostgres("heartbeat responsible-user invariant", () => {
   let db!: ReturnType<typeof createDb>;
   let heartbeat!: ReturnType<typeof heartbeatService>;
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  async function waitForRun(db: ReturnType<typeof createDb>, runId: string) {
+    // Dispatch returns before execution finishes; terminal rows can also precede
+    // cleanup and repair handoffs. Join the owned work instead of guessing a delay.
+    await heartbeat.drainActiveRunExecutions();
+    return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).then((rows) => rows[0] ?? null);
+  }
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-heartbeat-responsible-user-");
@@ -216,10 +214,16 @@ describeEmbeddedPostgres("heartbeat responsible-user invariant", () => {
     expect(completed?.contextSnapshot?.originIdentityContextId).toBeUndefined();
     expect(completed?.contextSnapshot?.retryOfRunId).toBeUndefined();
     expect(completed?.contextSnapshot?.wakeCommentIds).toEqual([commentId]);
+    const executionsBeforeDuplicate = mockAdapterExecute.mock.calls.length;
     await heartbeat.resumeQueuedCommentInterrupt(companyId, queueId);
-    expect(mockAdapterExecute).toHaveBeenCalledOnce();
     await drainHeartbeatRunsToQuiescence(db, heartbeat);
+    expect(mockAdapterExecute).toHaveBeenCalledTimes(executionsBeforeDuplicate);
+    expect(mockAdapterExecute.mock.calls.filter(([input]) => input?.runId === receipt.runId)).toHaveLength(1);
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId));
+    const repairs = runs.filter(run => run.id !== receipt.runId);
+    expect(repairs).toHaveLength(1);
+    expect(repairs[0].contextSnapshot).toMatchObject({ wakeReason: "issue_disposition_repair", retryOfRunId: receipt.runId });
+    expect(mockAdapterExecute).toHaveBeenCalledTimes(runs.length);
     expect(runs.every(run => run.responsibleUserId === operatorId && run.status === "succeeded")).toBe(true);
     expect((await db.select().from(issueComments).where(eq(issueComments.id, commentId)))[0].authorUserId).toBe(ownerUserId);
   });
@@ -295,12 +299,14 @@ describeEmbeddedPostgres("heartbeat responsible-user invariant", () => {
       assigneeAgentId: agentId, responsibleUserId: ownerUserId });
     let finish!: () => void;
     const blocked = new Promise<void>(resolve => { finish = resolve; });
+    const entered = Promise.withResolvers<void>();
     const execute = mockAdapterExecute.getMockImplementation()!;
-    mockAdapterExecute.mockImplementationOnce(async () => { await blocked; return execute(); });
+    mockAdapterExecute.mockImplementationOnce(async () => { entered.resolve(); await blocked; return execute(); });
     const first = await heartbeat.wakeup(agentId, { payload: { issueId },
       requestedByActorType: "user", requestedByActorId: ownerUserId });
     try {
-      await vi.waitFor(() => expect(mockAdapterExecute).toHaveBeenCalled(), { timeout: 5_000 });
+      await entered.promise;
+      expect(mockAdapterExecute).toHaveBeenCalledOnce();
       await db.insert(issueComments).values({ id: commentId, companyId, issueId, authorUserId: ownerUserId, body: "Pending work" });
       await db.insert(agentWakeupRequests).values({ id: queueId, companyId, agentId,
         source: "automation", reason: "issue_commented", status: "deferred_issue_execution",
@@ -334,13 +340,15 @@ describeEmbeddedPostgres("heartbeat responsible-user invariant", () => {
       membershipRole: "operator", status: "active" });
     let finish!: () => void;
     const blocked = new Promise<void>(resolve => { finish = resolve; });
+    const entered = Promise.withResolvers<void>();
     const execute = mockAdapterExecute.getMockImplementation()!;
-    mockAdapterExecute.mockImplementationOnce(async () => { await blocked; return execute(); });
+    mockAdapterExecute.mockImplementationOnce(async () => { entered.resolve(); await blocked; return execute(); });
     const first = await heartbeat.wakeup(agentId, { manualUserWake: true, source: "on_demand", triggerDetail: "manual",
       requestedByActorType: "user", requestedByActorId: ownerUserId });
     let second: Awaited<ReturnType<typeof heartbeat.wakeup>>;
     try {
-      await vi.waitFor(() => expect(mockAdapterExecute).toHaveBeenCalled(), { timeout: 5_000 });
+      await entered.promise;
+      expect(mockAdapterExecute).toHaveBeenCalledOnce();
       second = await heartbeat.wakeup(agentId, { manualUserWake: true, source: "on_demand", triggerDetail: "manual",
         requestedByActorType: "user", requestedByActorId: operatorId });
       expect(second?.id).not.toBe(first!.id);
@@ -428,7 +436,9 @@ describeEmbeddedPostgres("heartbeat responsible-user invariant", () => {
       expect(handoff.status).toBe("succeeded");
     }
     expect(mockAdapterExecute).toHaveBeenCalledTimes(runs.length);
-  });
+    // Three real source/repair pairs measured ~15s before final cleanup under load.
+    // Keep all six executions bounded without borrowing a one-run 15s budget.
+  }, 30_000);
 
   it.each(["issue_commented"])(
     "uses the persisted message author for %s without changing issue ownership",
