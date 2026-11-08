@@ -31,14 +31,30 @@ const git = async (cwd: string, ...args: string[]) => (await execute("git", ["-c
 
 describe.skipIf(!support.supported)("bounded workspace cohort migration", () => {
   let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>, db: ReturnType<typeof createDb>, home: string, storage: StorageService;
+  type MigrationScope = { controller: AbortController; pending: Set<Promise<unknown>> };
+  let migrations: MigrationScope;
+  async function stopMigrations(scope: MigrationScope) {
+    scope.controller.abort(new Error("cohort_test_finished"));
+    await Promise.allSettled([...scope.pending]);
+  }
+  async function ownedMigration<T>(scope: MigrationScope, operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    scope.controller.signal.throwIfAborted();
+    const pending = operation(AbortSignal.any([scope.controller.signal, signal ?? AbortSignal.timeout(50_000)]));
+    scope.pending.add(pending);
+    try { return await pending; } finally { scope.pending.delete(pending); }
+  }
   beforeAll(async () => { database = await startEmbeddedPostgresTestDatabase("workspace-cohort-"); db = createDb(database.connectionString, { maxConnections: 8 }); }, 90_000);
   afterAll(async () => { await db?.$client.end({ timeout: 1 }); await database?.cleanup(); });
   beforeEach(async () => {
+    migrations = { controller: new AbortController(), pending: new Set() };
     home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pc-workspace-cohort-")));
     vi.stubEnv("PAPERCLIP_HOME", home); vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY", "61".repeat(32));
     storage = createStorageService(createLocalDiskStorageProvider(path.join(home, "objects")));
   });
   afterEach(async () => {
+    // A timed-out body can still be awaiting capture or replay. Abort and join
+    // its owned work before removing rows, mocks, or its isolated home.
+    await stopMigrations(migrations);
     vi.restoreAllMocks();
     await db.delete(activityLog); await db.delete(workspaceOperations); await db.delete(executionWorkspaceSnapshots);
     await db.execute(sql`drop trigger if exists cohort_publish_probe on execution_workspaces`);
@@ -50,6 +66,7 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     vi.unstubAllEnvs(); await fs.rm(home, { recursive: true, force: true });
   });
   async function fixture() {
+    const scope = migrations;
     const companyId = randomUUID(), projectId = randomUUID(), root = resolveManagedProjectWorkspaceDir({ companyId, projectId });
     await db.insert(companies).values({ id: companyId, name: "Cohort", issuePrefix: `C${companyId.slice(0, 6)}` });
     await db.insert(projects).values({ id: projectId, companyId, name: "Shared Git" });
@@ -68,11 +85,11 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
       if (name !== "base") { await fs.writeFile(path.join(cwd, "saved.txt"), `${name} dirty tracked work\n`); await fs.writeFile(path.join(cwd, "untracked.txt"), `${name} untracked work\n`); }
       members.push(workspace);
     }
-    return { companyId, projectId, root, parent: members[0], leaves: members.slice(1) };
+    return { companyId, projectId, root, parent: members[0], leaves: members.slice(1), scope };
   }
   const run = (f: Awaited<ReturnType<typeof fixture>>, extra: Partial<Parameters<typeof migrateRemoteWorkspaceCohort>[0]> = {}) =>
-    migrateRemoteWorkspaceCohort({ db, storage, companyId: f.companyId, workspaceIds: f.leaves.map(row => row.id),
-      apply: true, concurrency: 2, signal: AbortSignal.timeout(50_000), ...extra });
+    ownedMigration(f.scope, signal => migrateRemoteWorkspaceCohort({ db, storage, companyId: f.companyId,
+      workspaceIds: f.leaves.map(row => row.id), apply: true, concurrency: 2, ...extra, signal }), extra.signal);
   const rows = (f: Awaited<ReturnType<typeof fixture>>) => db.select().from(executionWorkspaces).where(inArray(executionWorkspaces.id, f.leaves.map(row => row.id)));
   async function assertLocal(f: Awaited<ReturnType<typeof fixture>>) {
     expect((await rows(f)).every(row => !readRemoteWorkspaceAuthority(row.metadata))).toBe(true);
@@ -115,8 +132,7 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
       } finally { active--; }
     });
     try {
-      await expect(migrateRemoteWorkspaceCohort({ db, storage, companyId: f.companyId, workspaceIds,
-        apply: true, signal: AbortSignal.timeout(50_000) })).resolves.toMatchObject({ applied: true });
+      await expect(run(f, { workspaceIds, concurrency: undefined })).resolves.toMatchObject({ applied: true });
     } finally { clearTimeout(timer); }
     expect(maximum).toBe(2);
     await expect(run(f)).resolves.toMatchObject({ applied: true, replayed: true });
@@ -156,8 +172,8 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     await db.update(issues).set({ executionWorkspaceId: child.id }).where(eq(issues.id, childIssue.id));
     await db.update(issues).set({ executionWorkspaceId: alias.id }).where(eq(issues.id, aliasIssue.id));
     await fs.writeFile(path.join(cwd, "untracked.txt"), "nested dirty bytes\n");
-    await migrateRemoteWorkspace({ db, storage, companyId: f.companyId, workspaceId: child.id, apply: true,
-      signal: AbortSignal.timeout(50_000) });
+    await ownedMigration(f.scope, signal => migrateRemoteWorkspace({ db, storage, companyId: f.companyId, workspaceId: child.id, apply: true,
+      signal }));
     const [snapshot] = await db.select().from(executionWorkspaceSnapshots).where(eq(executionWorkspaceSnapshots.executionWorkspaceId, child.id));
     const get = storage.getObject.bind(storage), head = storage.headObject.bind(storage);
     let reads = 0;
@@ -221,8 +237,8 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     expect(await db.select().from(workspaceOperations)).toHaveLength(1);
     expect(await db.select().from(executionWorkspaceSnapshots)).toHaveLength(0);
     await expect(run(f, { workspaceIds: [operation.executionWorkspaceId!] })).rejects.toThrow("workspace_cohort_membership_changed");
-    await expect(migrateRemoteWorkspace({ db, storage, companyId: f.companyId, workspaceId: operation.executionWorkspaceId!,
-      apply: true, signal: AbortSignal.timeout(50_000) })).rejects.toThrow("remote_workspace_cohort_resume_required");
+    await expect(ownedMigration(f.scope, signal => migrateRemoteWorkspace({ db, storage, companyId: f.companyId, workspaceId: operation.executionWorkspaceId!,
+      apply: true, signal }))).rejects.toThrow("remote_workspace_cohort_resume_required");
     await db.execute(sql`drop trigger cohort_reserve_fault on workspace_operations`);
     await expect(run(f)).resolves.toMatchObject({ applied: true, cohortId: (membership as { id: string }).id });
     const operations = await db.select().from(workspaceOperations);
@@ -273,8 +289,8 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
   });
   it("refuses mixed local and independently imported members before storage or journal work", async () => {
     const f = await fixture(), [first, second] = f.leaves;
-    await migrateRemoteWorkspace({ db, storage, companyId: f.companyId, workspaceId: first.id, apply: true,
-      signal: AbortSignal.timeout(50_000) });
+    await ownedMigration(f.scope, signal => migrateRemoteWorkspace({ db, storage, companyId: f.companyId, workspaceId: first.id, apply: true,
+      signal }));
     const operations = await db.select().from(workspaceOperations), snapshots = await db.select().from(executionWorkspaceSnapshots);
     const workspaces = await rows(f);
     expect(readRemoteWorkspaceAuthority(workspaces.find(row => row.id === first.id)!.metadata)).not.toBeNull();
@@ -336,7 +352,45 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     expect(await db.select().from(workspaceOperations)).toHaveLength(2);
     expect(await db.select().from(activityLog)).toHaveLength(0);
   });
-  it("does not publish after its actual fence connection is lost", async () => {
+  it("joins canceled capture peers and rejects late replay before teardown removes their state", async () => {
+    const f = await fixture(), entered = Promise.withResolvers<void>(), aborted = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let captures = 0, cleanupFinished = false;
+    vi.spyOn(storage, "putFile").mockImplementation(async input => {
+      if (++captures === 2) entered.resolve();
+      input.signal!.addEventListener("abort", () => aborted.resolve(), { once: true });
+      await release.promise;
+      input.signal!.throwIfAborted();
+      throw new Error("capture unexpectedly continued");
+    });
+    const pending = run(f).then(value => ({ value }), error => ({ error }));
+    let cleanup: Promise<void> | undefined;
+    const other = createDb(database.connectionString, { maxConnections: 1 });
+    try {
+      await entered.promise;
+      cleanup = stopMigrations(f.scope).then(() => { cleanupFinished = true; });
+      await aborted.promise;
+      expect(cleanupFinished).toBe(false);
+      expect((await db.select().from(companies)).some(row => row.id === f.companyId)).toBe(true);
+      await expect(run(f)).rejects.toThrow("cohort_test_finished");
+      expect(captures).toBe(2);
+      await expect(withWorkspaceSourceLocks(other, { companyId: f.companyId, projectIds: [f.projectId] }, async () => true, true))
+        .rejects.toBeInstanceOf(IsolatedRepositorySourceBusy);
+    } finally {
+      release.resolve();
+      await pending;
+      await cleanup;
+      await other.$client.end({ timeout: 1 });
+    }
+    expect(cleanupFinished).toBe(true);
+    expect(f.scope.pending.size).toBe(0);
+    expect(await pending).toHaveProperty("error");
+    await assertLocal(f);
+    expect(await db.select().from(activityLog)).toHaveLength(0);
+  });
+  // Each fault/replay case runs two complete migrations (about 6–7s locally;
+  // exceeded 15s under hosted load). Keep a bounded budget for the combined path.
+  it("does not publish after its actual fence connection is lost", async ({ signal }) => {
     const f = await fixture(), put = storage.putFile.bind(storage); let killed = false;
     vi.spyOn(storage, "putFile").mockImplementation(async input => {
       const result = await put(input);
@@ -348,13 +402,13 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
       }
       return result;
     });
-    await expect(run(f)).rejects.toThrow();
+    await expect(run(f, { signal })).rejects.toThrow();
     await assertLocal(f);
     expect(await db.select().from(activityLog)).toHaveLength(0);
     vi.restoreAllMocks();
-    await expect(run(f)).resolves.toMatchObject({ applied: true });
+    await expect(run(f, { signal })).resolves.toMatchObject({ applied: true });
     expect((await rows(f)).every(row => readRemoteWorkspaceAuthority(row.metadata))).toBe(true);
-  });
+  }, 30_000);
   it("refuses unreviewed membership, a parent/child pair, and a foreign journal without captures", async () => {
     const f = await fixture(), put = vi.spyOn(storage, "putFile");
     await expect(run(f, { workspaceIds: Array(9).fill(f.leaves[0].id) })).rejects.toThrow();
@@ -369,7 +423,7 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     await assertLocal(f);
   });
 
-  it("keeps every authority and activity unpublished when the actual outer commit fails", async () => {
+  it("keeps every authority and activity unpublished when the actual outer commit fails", async ({ signal }) => {
     const f = await fixture(), events: unknown[] = [], unsubscribe = subscribeCompanyLiveEvents(f.companyId, event => {
       if (event.type === "activity.logged") events.push(event);
     });
@@ -377,7 +431,7 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     await db.execute(sql`create constraint trigger cohort_commit_fault after update on workspace_operations deferrable initially deferred
       for each row when (new.status='succeeded') execute function cohort_commit_fault()`);
     try {
-      await expect(run(f)).rejects.toThrow();
+      await expect(run(f, { signal })).rejects.toThrow();
       expect(events).toEqual([]);
       await assertLocal(f);
       expect(await db.select().from(activityLog)).toHaveLength(0);
@@ -385,11 +439,11 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
       expect(journals.every(row => row.status === "running")).toBe(true);
       expect((await db.select().from(executionWorkspaceSnapshots)).every(row => row.status === "uploaded")).toBe(true);
       await db.execute(sql`drop trigger cohort_commit_fault on workspace_operations`);
-      await expect(run(f)).resolves.toMatchObject({ applied: true });
+      await expect(run(f, { signal })).resolves.toMatchObject({ applied: true });
       expect(events).toHaveLength(2);
       expect((await db.select().from(workspaceOperations)).map(row => row.id).sort()).toEqual(journals.map(row => row.id).sort());
     } finally { unsubscribe(); }
-  });
+  }, 30_000);
   it("does not return a savepoint success inside somebody else's source transaction", async () => {
     const f = await fixture(), put = vi.spyOn(storage, "putFile");
     await withWorkspaceSourceLocks(db, { companyId: f.companyId, projectIds: [f.projectId] }, async () => {
