@@ -25,9 +25,7 @@ concurrency:
 
 jobs:
   paired:
-    if: >-
-      contains(github.event.pull_request.labels.*.name, 'profile-ci') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'profile-ci')
+    if: ${{ github.repository == 'paperclipai/paperclip' && (contains(github.event.pull_request.labels.*.name, 'profile-ci') && (github.event.action != 'labeled' || github.event.label.name == 'profile-ci')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -174,9 +172,7 @@ jobs:
           retention-days: 14
 
   rust_prime:
-    if: >-
-      contains(github.event.pull_request.labels.*.name, 'profile-ci') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'profile-ci')
+    if: ${{ github.repository == 'paperclipai/paperclip' && (contains(github.event.pull_request.labels.*.name, 'profile-ci') && (github.event.action != 'labeled' || github.event.label.name == 'profile-ci')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -221,6 +217,7 @@ jobs:
           path: ${{ steps.debug.outputs.paths }}
 
   rust_restore:
+    if: github.repository == 'paperclipai/paperclip'
     needs: rust_prime
     runs-on: ubuntu-latest
     timeout-minutes: 15

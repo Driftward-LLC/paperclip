@@ -10,6 +10,7 @@ on:
 
 jobs:
   authorize:
+    if: github.repository == 'paperclipai/paperclip'
     name: Authorize optional paid E2E
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -33,6 +34,7 @@ jobs:
           jq -e --argjson candidate "$ACTOR_ID" 'index($candidate) != null' <<< "$ALLOWED_ACTOR_IDS" >/dev/null
 
   e2e:
+    if: github.repository == 'paperclipai/paperclip'
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 30

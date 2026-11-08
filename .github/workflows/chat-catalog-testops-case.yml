@@ -46,6 +46,7 @@ env:
 
 jobs:
   chat:
+    if: github.repository == 'paperclipai/paperclip'
     name: Execute the original selected case
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ fromJSON(inputs.cell).timeout_minutes }}
@@ -174,7 +175,7 @@ jobs:
   report:
     name: Retain private originals and build the exact safe TestOps projection
     needs: chat
-    if: always() && !cancelled() && (needs.chat.result == 'success' || needs.chat.result == 'failure')
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && (needs.chat.result == 'success' || needs.chat.result == 'failure')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: runner-e2e-private-history
@@ -275,7 +276,7 @@ jobs:
   upload:
     name: Publish only this original case without closing the shared job run
     needs: report
-    if: always() && !cancelled() && (needs.report.result == 'success' || needs.report.result == 'failure')
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && (needs.report.result == 'success' || needs.report.result == 'failure')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: runner-e2e-testops-reporting

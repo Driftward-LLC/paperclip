@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   authorize:
+    if: github.repository == 'paperclipai/paperclip'
     name: Authorize registration
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -71,6 +72,7 @@ jobs:
           done
 
   register:
+    if: github.repository == 'paperclipai/paperclip'
     name: Register the Reliability plan in TestOps
     needs: authorize
     runs-on: ubuntu-latest

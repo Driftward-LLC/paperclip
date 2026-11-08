@@ -26,6 +26,7 @@ concurrency:
 
 jobs:
   sentry-contract:
+    if: github.repository == 'paperclipai/paperclip'
     name: Real Sentry SDK isolation
     runs-on: ubuntu-latest
     timeout-minutes: 20

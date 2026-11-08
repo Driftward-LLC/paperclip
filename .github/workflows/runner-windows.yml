@@ -37,6 +37,7 @@ concurrency:
 
 jobs:
   rust:
+    if: github.repository == 'paperclipai/paperclip'
     name: Runner Rust (Windows x64)
     runs-on: windows-2025
     timeout-minutes: 60

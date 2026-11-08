@@ -14,7 +14,7 @@ concurrency:
 jobs:
   admission:
     name: Cloud image candidate admission v1
-    if: github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master') }}
     runs-on: ${{ vars.CORE_PUBLICATION_RUNNER || 'cloud-release-32' }}
     timeout-minutes: 5
     permissions:
@@ -37,7 +37,7 @@ jobs:
 
   build:
     needs: admission
-    if: github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && needs.admission.outputs.admitted == 'true'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master' && needs.admission.outputs.admitted == 'true') }}
     runs-on: ${{ vars.CORE_PUBLICATION_RUNNER || 'cloud-release-32' }}
     timeout-minutes: 10
     permissions:
@@ -75,7 +75,7 @@ jobs:
 
   publish:
     needs: build
-    if: github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.ref == 'refs/heads/master') }}
     runs-on: ${{ vars.CORE_PUBLICATION_RUNNER || 'cloud-release-32' }}
     timeout-minutes: 5
     permissions:

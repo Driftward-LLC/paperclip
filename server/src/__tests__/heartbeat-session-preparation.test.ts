@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { agents, agentTaskSessions, authUsers, companies, companyMemberships, createDb, executionWorkspaces, heartbeatRuns, issues, plugins, projects } from "@paperclipai/db";
-import { registerServerAdapter, unregisterServerAdapter, type AdapterExecutionContext } from "../adapters/index.js";
+import { getServerAdapter, registerServerAdapter, unregisterServerAdapter, type AdapterExecutionContext } from "../adapters/index.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -13,6 +13,7 @@ import * as environmentOrchestrator from "../services/environment-run-orchestrat
 import { createPluginWorkspaceFixture } from "./helpers/plugin-workspaces.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
+const createOrchestrator = environmentOrchestrator.environmentRunOrchestrator;
 const support = await getEmbeddedPostgresTestSupport();
 const describePostgres = support.supported ? describe : describe.skip;
 if (!support.supported) console.warn(`Skipping session preparation tests: ${support.reason}`);
@@ -59,19 +60,75 @@ describePostgres("heartbeat session preparation through adapter dispatch", () =>
     return { companyId, agentId, issueId };
   }
 
-  async function execute(f: Awaited<ReturnType<typeof seed>>, context: Record<string, unknown> = {}) {
+  async function execute(f: Awaited<ReturnType<typeof seed>>, context: Record<string, unknown> = {}, service = heartbeat) {
     await db.update(issues).set({ status: "todo" }).where(eq(issues.id, f.issueId));
-    const run = await heartbeat.wakeup(f.agentId, {
+    const run = await service.wakeup(f.agentId, {
       source: "on_demand", triggerDetail: "manual", reason: "manual",
       payload: { issueId: f.issueId }, contextSnapshot: { issueId: f.issueId, ...context },
     });
     expect(run).not.toBeNull();
-    await heartbeat.drainActiveRunExecutions();
+    await service.drainActiveRunExecutions();
     const finished = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run!.id)).then(rows => rows[0]);
     expect(finished?.status, finished?.error ?? undefined).toBe("succeeded");
     expect(captured.has(run!.id)).toBe(true);
     return { input: captured.get(run!.id)!, finished };
   }
+
+  async function createRepositorySessionFixture() {
+    const f = await seed();
+    const storage = await createPluginWorkspaceFixture(db, f.companyId);
+    const [plugin] = await db.select().from(plugins).where(eq(plugins.id, storage.pluginId));
+    await db.update(plugins).set({ manifestJson: { ...plugin.manifestJson, workspaceProvider: {
+      ...plugin.manifestJson.workspaceProvider!, defaultForProjects: { mode: "isolated_workspace", strategy: "git_worktree" },
+    } } }).where(eq(plugins.id, storage.pluginId));
+    await db.update(projects).set({ executionWorkspacePolicy: { enabled: true, storageProviderPluginId: storage.pluginId } }).where(eq(projects.id, storage.input.projectId));
+    await db.update(issues).set({ projectId: storage.input.projectId, projectWorkspaceId: storage.input.projectWorkspaceId }).where(eq(issues.id, f.issueId));
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: true, enableIsolatedWorkspacesByDefault: true });
+    const cwd = await mkdtemp(join(tmpdir(), "session-provider-fixture-"));
+    const realization = vi.spyOn(environmentOrchestrator, "environmentRunOrchestrator").mockImplementation((...args) => ({
+      ...createOrchestrator(...args),
+      realizeForRun: async input => {
+        input.executionWorkspace.cwd = cwd;
+        return { lease: input.lease, persistedExecutionWorkspace: input.persistedExecutionWorkspace,
+          workspaceRealization: {}, executionTarget: null, remoteExecution: null };
+      },
+    }));
+    let service: ReturnType<typeof heartbeatService> | undefined, closed = false, closing: Promise<void> | undefined;
+    const pending = new Set<Promise<unknown>>();
+    function close() {
+      return closing ??= (async () => {
+        closed = true;
+        try {
+          // Join the complete execute wrapper, including work before wake registration.
+          await Promise.allSettled([...pending]);
+          await service?.drainActiveRunExecutions();
+        } finally {
+          realization.mockRestore();
+          await rm(cwd, { recursive: true, force: true });
+          await db.delete(plugins).where(eq(plugins.id, storage.pluginId));
+          await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false, enableIsolatedWorkspacesByDefault: false });
+        }
+      })();
+    }
+    try {
+      service = heartbeatService(db, { pluginWorkerManager: storage.workers as PluginWorkerManager });
+      return { f, storage, close,
+        async execute(context: Record<string, unknown> = {}) {
+          if (closed) throw new Error("session_provider_fixture_closed");
+          const operation = execute(f, context, service!);
+          pending.add(operation);
+          try { return await operation; } finally { pending.delete(operation); }
+        },
+      };
+    } catch (error) { await close(); throw error; }
+  }
+
+  const repositoryPolicyTest = it.extend<{ repositorySession: Awaited<ReturnType<typeof createRepositorySessionFixture>> }>({
+    repositorySession: async ({}, use) => {
+      const fixture = await createRepositorySessionFixture();
+      try { await use(fixture); } finally { await fixture.close(); }
+    },
+  });
 
   it("reuses unchanged task sessions and strips host freshness metadata before dispatch", async () => {
     const f = await seed();
@@ -112,66 +169,68 @@ describePostgres("heartbeat session preparation through adapter dispatch", () =>
     } finally { await db.delete(plugins).where(eq(plugins.id, storage.pluginId)); }
   });
 
-  it.each([
-    null,
-    { mode: "isolated_workspace" },
-    { workspaceStrategy: { type: "git_worktree", branchTemplate: "work" } },
-  ])("keeps a default-attached repository policy stable through binding with settings %j and retains the provider on policy changes", async (settings) => {
-    const f = await seed();
-    const storage = await createPluginWorkspaceFixture(db, f.companyId);
-    const [plugin] = await db.select().from(plugins).where(eq(plugins.id, storage.pluginId));
-    await db.update(plugins).set({ manifestJson: { ...plugin.manifestJson, workspaceProvider: {
-      ...plugin.manifestJson.workspaceProvider!, defaultForProjects: { mode: "isolated_workspace", strategy: "git_worktree" },
-    } } }).where(eq(plugins.id, storage.pluginId));
-    await db.update(projects).set({ executionWorkspacePolicy: { enabled: true, storageProviderPluginId: storage.pluginId } }).where(eq(projects.id, storage.input.projectId));
-    await db.update(issues).set({ projectId: storage.input.projectId, projectWorkspaceId: storage.input.projectWorkspaceId,
-      executionWorkspaceSettings: settings,
-    }).where(eq(issues.id, f.issueId));
-    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: true, enableIsolatedWorkspacesByDefault: true });
-    const cwd = await mkdtemp(join(tmpdir(), "session-provider-fixture-"));
-    const createOrchestrator = environmentOrchestrator.environmentRunOrchestrator;
-    const realization = vi.spyOn(environmentOrchestrator, "environmentRunOrchestrator").mockImplementation((...args) => ({
-      ...createOrchestrator(...args),
-      realizeForRun: async input => {
-        input.executionWorkspace.cwd = cwd;
-        return { lease: input.lease, persistedExecutionWorkspace: input.persistedExecutionWorkspace,
-          workspaceRealization: {}, executionTarget: null, remoteExecution: null };
-      },
-    }));
-    const originalHeartbeat = heartbeat;
-    heartbeat = heartbeatService(db, { pluginWorkerManager: storage.workers as PluginWorkerManager });
-    try {
-      const first = await execute(f);
-      const [bound] = await db.select().from(issues).where(eq(issues.id, f.issueId));
-      expect(bound.executionWorkspaceId).toEqual(expect.any(String));
-      expect(bound.executionWorkspacePreference).toBe("reuse_existing");
-      expect(bound.executionWorkspaceSettings).toEqual({ ...settings, mode: "isolated_workspace" });
-      const [workspace] = await db.select().from(executionWorkspaces).where(eq(executionWorkspaces.id, bound.executionWorkspaceId!));
-      expect([...captured.values()].filter(input => input.context.issueId === f.issueId)).toHaveLength(1);
-      expect(workspace).toMatchObject({ providerType: "plugin", strategyType: "git_worktree" });
-      for (let turn = 0; turn < 2; turn++) {
-        const next = await execute(f);
-        expect(next.input.runtime.sessionId).toBe("saved-session");
-        expect(next.input.config.workspaceStrategy).toEqual(first.input.config.workspaceStrategy);
-        expect(next.finished.resultJson).toMatchObject({ configFreshness: {
-          session: { reset: false, taskSessionReused: true, changedCategories: [] },
-          workspace: { action: "reuse", workspaceReused: true, changedCategories: [], activeWorkspaceId: bound.executionWorkspaceId },
-        } });
-      }
-      await db.update(projects).set({ executionWorkspacePolicy: { enabled: true, allowIssueOverride: false, storageProviderPluginId: storage.pluginId } }).where(eq(projects.id, storage.input.projectId));
-      const changed = await execute(f);
-      expect(changed.input.runtime.sessionId).toBeNull();
-      expect(changed.finished.resultJson).toMatchObject({ configFreshness: { session: { reset: true, changedCategories: ["workspaceConfig"] } } });
-      const [retained] = await db.select().from(executionWorkspaces).where(eq(executionWorkspaces.id, bound.executionWorkspaceId!));
-      expect(retained.metadata?.workspaceProviderOwner).toBe(storage.pluginId);
-    } finally {
-      await heartbeat.drainActiveRunExecutions();
-      heartbeat = originalHeartbeat;
-      realization.mockRestore();
-      await rm(cwd, { recursive: true, force: true });
-      await db.delete(plugins).where(eq(plugins.id, storage.pluginId));
-      await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false, enableIsolatedWorkspacesByDefault: false });
+  // Four real executions measured 7.8–9.5s locally and exceeded 15s on a loaded runner.
+  repositoryPolicyTest.for([
+    [null],
+    [{ mode: "isolated_workspace" }],
+    [{ workspaceStrategy: { type: "git_worktree", branchTemplate: "work" } }],
+  ])("keeps a default-attached repository policy stable through binding with settings %j and retains the provider on policy changes", { timeout: 30_000 }, async ([settings], { repositorySession }) => {
+    const { f, storage } = repositorySession;
+    await db.update(issues).set({ executionWorkspaceSettings: settings }).where(eq(issues.id, f.issueId));
+    const first = await repositorySession.execute();
+    const [bound] = await db.select().from(issues).where(eq(issues.id, f.issueId));
+    expect(bound.executionWorkspaceId).toEqual(expect.any(String));
+    expect(bound.executionWorkspacePreference).toBe("reuse_existing");
+    expect(bound.executionWorkspaceSettings).toEqual({ ...settings, mode: "isolated_workspace" });
+    const [workspace] = await db.select().from(executionWorkspaces).where(eq(executionWorkspaces.id, bound.executionWorkspaceId!));
+    expect([...captured.values()].filter(input => input.context.issueId === f.issueId)).toHaveLength(1);
+    expect(workspace).toMatchObject({ providerType: "plugin", strategyType: "git_worktree" });
+    for (let turn = 0; turn < 2; turn++) {
+      const next = await repositorySession.execute();
+      expect(next.input.runtime.sessionId).toBe("saved-session");
+      expect(next.input.config.workspaceStrategy).toEqual(first.input.config.workspaceStrategy);
+      expect(next.finished.resultJson).toMatchObject({ configFreshness: {
+        session: { reset: false, taskSessionReused: true, changedCategories: [] },
+        workspace: { action: "reuse", workspaceReused: true, changedCategories: [], activeWorkspaceId: bound.executionWorkspaceId },
+      } });
     }
+    await db.update(projects).set({ executionWorkspacePolicy: { enabled: true, allowIssueOverride: false, storageProviderPluginId: storage.pluginId } }).where(eq(projects.id, storage.input.projectId));
+    const changed = await repositorySession.execute();
+    expect(changed.input.runtime.sessionId).toBeNull();
+    expect(changed.finished.resultJson).toMatchObject({ configFreshness: { session: { reset: true, changedCategories: ["workspaceConfig"] } } });
+    const [retained] = await db.select().from(executionWorkspaces).where(eq(executionWorkspaces.id, bound.executionWorkspaceId!));
+    expect(retained.metadata?.workspaceProviderOwner).toBe(storage.pluginId);
+  });
+
+  repositoryPolicyTest("joins an active provider before restoring its mock and rejects late execution", async ({ repositorySession }) => {
+    let markEntered!: () => void, release!: () => void, cleanupFinished = false;
+    const entered = new Promise<void>(resolve => { markEntered = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const adapter = getServerAdapter(adapterType), originalExecute = adapter.execute;
+    const execution = vi.spyOn(adapter, "execute").mockImplementationOnce(async input => {
+      markEntered();
+      await released;
+      return originalExecute(input);
+    });
+    const pending = repositorySession.execute();
+    let closing: Promise<void> | undefined;
+    try {
+      await entered;
+      closing = repositorySession.close().then(() => { cleanupFinished = true; });
+      expect(cleanupFinished).toBe(false);
+      expect(vi.isMockFunction(environmentOrchestrator.environmentRunOrchestrator)).toBe(true);
+      expect(await db.select().from(plugins).where(eq(plugins.id, repositorySession.storage.pluginId))).toHaveLength(1);
+      expect(cleanupFinished).toBe(false);
+      await expect(repositorySession.execute()).rejects.toThrow("session_provider_fixture_closed");
+      expect(execution).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      try { await pending; await closing; } finally { execution.mockRestore(); }
+    }
+    expect(cleanupFinished).toBe(true);
+    expect(environmentOrchestrator.environmentRunOrchestrator).toBe(createOrchestrator);
+    expect(await db.select().from(plugins).where(eq(plugins.id, repositorySession.storage.pluginId))).toHaveLength(0);
+    await expect(execute(await seed())).resolves.toMatchObject({ finished: { status: "succeeded" } });
   });
 
   it("starts fresh when effective model configuration changes and persists the reason", async () => {

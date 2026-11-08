@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   qualify_test_selection:
+    if: github.repository == 'paperclipai/paperclip'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -70,6 +71,7 @@ jobs:
           NODE
 
   qualify:
+    if: github.repository == 'paperclipai/paperclip'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

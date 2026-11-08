@@ -183,7 +183,7 @@ test("the trusted PR workflow keeps a stable aggregate check named e2e over the 
   const aggregate = jobs.get("e2e");
   assert.ok(aggregate, "pr-trusted.yml must define an `e2e` job to satisfy branch protection");
   assert.match(aggregate, /^ {4}name: e2e$/m, "the aggregate job must be named exactly `e2e`");
-  assert.match(aggregate, /^ {4}if: \$\{\{ always\(\) \}\}$/m, "the aggregate must run even when a shard fails");
+  assert.match(aggregate, /^ {4}if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \(always\(\)\) \}\}$/m, "the aggregate must run even when a shard fails");
   assert.match(
     aggregate,
     /^ {4}needs: \[gate, (?:policy, )?e2e_shards\]$/m,
@@ -250,7 +250,7 @@ test("the trusted PR workflow limits full CI to merge-relevant stack layers", ()
   ]) {
     assert.match(
       jobs.get(jobId),
-      /^ {4}if: \$\{\{ (?:always\(\) && !cancelled\(\) && needs\.gate\.result == 'success' && )?needs\.gate\.outputs\.full_ci == 'true' && /m,
+      /^ {4}if: \$\{\{ github\.repository == 'paperclipai\/paperclip' && \((?:always\(\) && !cancelled\(\) && needs\.gate\.result == 'success' && )?needs\.gate\.outputs\.full_ci == 'true' && /m,
       `${jobId} must run only when the gate selects full CI`,
     );
   }
@@ -328,8 +328,8 @@ test("the trusted PR workflow regenerates stale stacked lockfiles", () => {
   // workflow; edits to this workflow take effect after code-owner review and merge.
   const workflow = readFileSync(trustedPrWorkflow, "utf8");
   assert.match(
-    workflow,
-    /policy:\n    needs: \[gate\][\s\S]{0,160}timeout-minutes: 10/,
+    workflow.split("  policy:\n")[1].split(/\n  [a-z0-9_]+:\n/)[0],
+    /needs: \[gate\][\s\S]*timeout-minutes: 10/,
     "the unconditional resolution step needs the same timeout headroom as the lockfile refresh workflow",
   );
   const policy = workflow.split("  policy:\n")[1].split("  typecheck_release_registry:\n")[0];

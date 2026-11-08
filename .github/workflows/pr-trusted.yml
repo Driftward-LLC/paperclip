@@ -25,16 +25,13 @@ concurrency:
 
 jobs:
   gate:
+    if: github.repository == 'paperclipai/paperclip'
     uses: paperclipai/paperclip/.github/workflows/ci-routing.yml@master
 
   test_selection:
     name: Select Vitest files
     needs: [gate]
-    if: >-
-      needs.gate.outputs.full_ci == 'true' && needs.gate.outputs.plan != '' &&
-      fromJSON(needs.gate.outputs.plan).mode == 'enabled' &&
-      fromJSON(needs.gate.outputs.plan).forceReason == null &&
-      (vars.CI_VITEST_SELECTION == '' || vars.CI_VITEST_SELECTION == 'enabled')
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && needs.gate.outputs.plan != '' && fromJSON(needs.gate.outputs.plan).mode == 'enabled' && fromJSON(needs.gate.outputs.plan).forceReason == null && (vars.CI_VITEST_SELECTION == '' || vars.CI_VITEST_SELECTION == 'enabled')) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 10
     # An unavailable optimization must not suppress the original test matrix.
@@ -118,6 +115,7 @@ jobs:
           NODE
 
   policy:
+    if: github.repository == 'paperclipai/paperclip'
     needs: [gate]
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 10
@@ -282,7 +280,7 @@ jobs:
   typecheck_release_registry:
     name: Typecheck + Release Registry
     needs: [gate]
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.typecheck_release_registry.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.typecheck_release_registry.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 20
 
@@ -496,7 +494,7 @@ jobs:
   general_tests:
     name: General tests (${{ matrix.group_label }})
     needs: [gate, test_selection]
-    if: ${{ always() && !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.full_ci == 'true' && ((needs.test_selection.outputs.plan || needs.gate.outputs.plan) == '' || fromJSON((needs.test_selection.outputs.plan || needs.gate.outputs.plan)).jobs.general_tests.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.full_ci == 'true' && ((needs.test_selection.outputs.plan || needs.gate.outputs.plan) == '' || fromJSON((needs.test_selection.outputs.plan || needs.gate.outputs.plan)).jobs.general_tests.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 20
     strategy:
@@ -613,7 +611,7 @@ jobs:
   docker_context_integrity:
     name: Docker context integrity
     needs: gate
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.docker_context_integrity.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.docker_context_integrity.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 15
 
@@ -673,7 +671,7 @@ jobs:
   sandbox_provider_tests:
     name: Sandbox provider tests
     needs: [gate]
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.sandbox_provider_tests.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.sandbox_provider_tests.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 15
 
@@ -736,7 +734,7 @@ jobs:
   verify_runner_e2e_support:
     name: Runner support suite
     needs: [gate]
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.verify_runner_e2e_support.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.verify_runner_e2e_support.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 20
 
@@ -796,7 +794,7 @@ jobs:
 
   verify:
     name: verify
-    if: ${{ always() }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always()) }}
     needs: [gate, test_selection, policy, typecheck_release_registry, general_tests, verify_paperclip_runner, build, docker_context_integrity, sandbox_provider_tests, verify_serialized_server, canary_dry_run, verify_runner_e2e_support]
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 5
@@ -826,7 +824,7 @@ jobs:
   verify_paperclip_runner:
     name: Verify Paperclip Runner (${{ matrix.lane_label }})
     needs: [gate]
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.verify_paperclip_runner.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.verify_paperclip_runner.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 20
     strategy:
@@ -1067,7 +1065,7 @@ jobs:
   build:
     name: Build
     needs: [gate]
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.build.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.build.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 20
 
@@ -1322,7 +1320,7 @@ jobs:
   verify_serialized_server:
     name: Verify serialized server suites (${{ matrix.shard_label }})
     needs: [gate, test_selection]
-    if: ${{ always() && !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.full_ci == 'true' && ((needs.test_selection.outputs.plan || needs.gate.outputs.plan) == '' || fromJSON((needs.test_selection.outputs.plan || needs.gate.outputs.plan)).jobs.verify_serialized_server.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.full_ci == 'true' && ((needs.test_selection.outputs.plan || needs.gate.outputs.plan) == '' || fromJSON((needs.test_selection.outputs.plan || needs.gate.outputs.plan)).jobs.verify_serialized_server.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 20
     strategy:
@@ -1430,7 +1428,7 @@ jobs:
   canary_dry_run:
     name: Canary Dry Run
     needs: [gate]
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.canary_dry_run.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.canary_dry_run.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 20
 
@@ -1648,7 +1646,7 @@ jobs:
   e2e_shards:
     name: e2e shard (${{ matrix.shard_label }})
     needs: [gate]
-    if: ${{ needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.e2e_shards.run) }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.gate.outputs.full_ci == 'true' && (needs.gate.outputs.plan == '' || fromJSON(needs.gate.outputs.plan).jobs.e2e_shards.run)) }}
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 30
     strategy:
@@ -1779,7 +1777,7 @@ jobs:
 
   e2e:
     name: e2e
-    if: ${{ always() }}
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always()) }}
     needs: [gate, policy, e2e_shards]
     runs-on: ${{ needs.gate.outputs.runner }}
     timeout-minutes: 5

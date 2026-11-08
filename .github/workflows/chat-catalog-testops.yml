@@ -33,6 +33,7 @@ env:
 
 jobs:
   authorize:
+    if: github.repository == 'paperclipai/paperclip'
     runs-on: ${{ github.repository == 'paperclipai/paperclip' && github.repository_id == '1170821064' && github.workflow_ref == 'paperclipai/paperclip/.github/workflows/chat-catalog-testops.yml@refs/heads/master' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch' && github.actor_id == '34892728' && github.run_attempt == '1' && github.triggering_actor == github.actor && 'runs-on/fleet=paperclip-public-pr-x64/env=public-ci' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
@@ -58,6 +59,7 @@ jobs:
         run: node tests/runner-e2e/chat-completion-testops-cli.mjs guard
 
   select:
+    if: github.repository == 'paperclipai/paperclip'
     name: Register the dedicated plan or validate its real TestOps selection
     needs: authorize
     runs-on: ubuntu-latest
@@ -136,7 +138,7 @@ jobs:
   build:
     name: Build the immutable catalog source without service or model credentials
     needs: [authorize, select]
-    if: needs.authorize.outputs.operation == 'evaluate'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.authorize.outputs.operation == 'evaluate') }}
     runs-on: ${{ needs.authorize.outputs.runner }}
     timeout-minutes: 45
     outputs:
@@ -198,7 +200,7 @@ jobs:
   chat:
     name: ${{ matrix.executionId }}
     needs: [authorize, select, build]
-    if: needs.authorize.outputs.operation == 'evaluate' && needs.select.outputs.native_count != '0'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.authorize.outputs.operation == 'evaluate' && needs.select.outputs.native_count != '0') }}
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJSON(needs.select.outputs.parallelism) }}
@@ -225,7 +227,7 @@ jobs:
   chat_external:
     name: ${{ matrix.executionId }}
     needs: [authorize, select, build]
-    if: needs.authorize.outputs.operation == 'evaluate' && needs.select.outputs.external_count != '0'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (needs.authorize.outputs.operation == 'evaluate' && needs.select.outputs.external_count != '0') }}
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -252,7 +254,7 @@ jobs:
   aggregate:
     name: Validate and merge every selected metadata-only projection
     needs: [authorize, select, build, chat, chat_external]
-    if: always() && !cancelled() && needs.authorize.outputs.operation == 'evaluate' && needs.select.result == 'success' && needs.build.result == 'success' && (needs.chat.result == 'success' || needs.chat.result == 'failure' || needs.chat_external.result == 'success' || needs.chat_external.result == 'failure')
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && needs.authorize.outputs.operation == 'evaluate' && needs.select.result == 'success' && needs.build.result == 'success' && (needs.chat.result == 'success' || needs.chat.result == 'failure' || needs.chat_external.result == 'success' || needs.chat_external.result == 'failure')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -312,7 +314,7 @@ jobs:
   verify:
     name: Verify final coverage without uploading any result again
     needs: [authorize, select, aggregate]
-    if: always() && !cancelled() && needs.authorize.outputs.operation == 'evaluate' && needs.aggregate.result == 'success'
+    if: ${{ github.repository == 'paperclipai/paperclip' && (always() && !cancelled() && needs.authorize.outputs.operation == 'evaluate' && needs.aggregate.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: runner-e2e-testops-reporting

@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   verify:
+    if: github.repository == 'paperclipai/paperclip'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: runner-e2e-testops-reporting
