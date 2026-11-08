@@ -96,7 +96,21 @@ describe("cli telemetry", () => {
     expect(fs.existsSync(path.join(root, "home", "instances", "telemetry-test", "telemetry", "state.json"))).toBe(false);
   });
 
+  it.each(["PAPERCLIP_TELEMETRY_DISABLED", "DO_NOT_TRACK"])("respects explicit %s even when config enables telemetry", async flag => {
+    delete process.env.PAPERCLIP_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    process.env[flag] = "1";
+    const { initTelemetry } = await import("../telemetry.js");
+
+    expect(initTelemetry({ enabled: true })).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("creates telemetry state only after the first event is tracked", async () => {
+    // fetch is mocked above. Isolate this opt-in case from the host's opt-outs;
+    // afterEach restores them, including the CI-wide telemetry disable flag.
+    delete process.env.PAPERCLIP_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-cli-telemetry-"));
     process.env.PAPERCLIP_HOME = path.join(root, "home");
     process.env.PAPERCLIP_INSTANCE_ID = "telemetry-test";

@@ -956,19 +956,25 @@ const recoveryFakeCodex = resolve(
         ),
         previousDriverSessionId: checkpoint.sessionId,
       });
-      const [epoch] = await readdir(join(root, "authority-epochs"));
+      const continuityArchives = await readdir(join(root, "continuity-breaks"));
+      expect(continuityArchives).toHaveLength(1);
+      const [continuityArchive] = continuityArchives;
+      const archivedRoot = join(root, "continuity-breaks", continuityArchive!);
+      // Retired epochs move with the old session. Leaving them active could
+      // revive old authority during a later cold rotation of the replacement.
+      expect(await readdir(root)).not.toContain("authority-epochs");
+      const epochs = await readdir(join(archivedRoot, "authority-epochs"));
+      expect(epochs).toHaveLength(1);
+      const [epoch] = epochs;
       const digest = (value: Buffer) =>
         createHash("sha256").update(value).digest("hex");
       expect(
         digest(
           await readFile(
-            join(root, "authority-epochs", epoch!, "runner-state.json"),
+            join(archivedRoot, "authority-epochs", epoch!, "runner-state.json"),
           ),
         ),
       ).toBe(digest(damagedRunnerBytes));
-      const [continuityArchive] = await readdir(
-        join(root, "continuity-breaks"),
-      );
       const archivedProvider = JSON.parse(
         await readFile(
           join(

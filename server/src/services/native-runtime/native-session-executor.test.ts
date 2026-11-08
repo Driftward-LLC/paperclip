@@ -15806,6 +15806,10 @@ describe("runnerd provider runtime wiring", () => {
     await mkdir(join(root, "control-plane"), { recursive: true });
     await writeFile(join(root, "runner", "retained.txt"), "Retained provider checkpoint");
     await writeFile(join(root, "control-plane", "retained.txt"), "Retained controller journal");
+    const epoch = join("authority-epochs", `epoch-${"a".repeat(24)}`, "runner-state.json");
+    const retiredState = JSON.stringify({ runId: "retired-owner" });
+    await mkdir(dirname(join(root, epoch)), { recursive: true });
+    await writeFile(join(root, epoch), retiredState);
     const replacement = backend.openReplacementSession!({ identity: current.binding } as never, {} as never);
     if (mode === "succeeded") {
       await replacement;
@@ -15815,6 +15819,9 @@ describe("runnerd provider runtime wiring", () => {
       expect(await readFile(join(root, "continuity-breaks", archives[0]!, "runner", "retained.txt"), "utf8"))
         .toBe("Retained provider checkpoint");
       expect(existsSync(join(root, "runner"))).toBe(false);
+      expect(existsSync(join(root, "authority-epochs"))).toBe(false);
+      expect(await readFile(join(root, "continuity-breaks", archives[0]!, epoch), "utf8"))
+        .toBe(retiredState);
     } else {
       const failure = await replacement.then(() => new Error("replacement unexpectedly succeeded"), (error: unknown) => error as Error);
       expect(failure.message).toMatch(/^runner_continuity_break_archive_failed: /);
@@ -15827,6 +15834,7 @@ describe("runnerd provider runtime wiring", () => {
       }
       expect(await readFile(join(root, "runner", "retained.txt"), "utf8")).toBe("Retained provider checkpoint");
       expect(await readFile(join(root, "control-plane", "retained.txt"), "utf8")).toBe("Retained controller journal");
+      expect(await readFile(join(root, epoch), "utf8")).toBe(retiredState);
       expect(openSession).not.toHaveBeenCalled();
     }
   });
