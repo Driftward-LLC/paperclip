@@ -2,20 +2,45 @@
 """Read authenticated package metadata; never infer absence from HTTP errors."""
 import json
 import os
+import urllib.error
 import urllib.request
 
 API = 'https://api.github.com'
 PACKAGE = '/orgs/Driftward-LLC/packages/container/paperclip'
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file, code, message, headers, new_url):
+        return None
+
+
+opener = urllib.request.build_opener(NoRedirect)
+
+
 def get(path):
+    token = os.environ.get('GH_PACKAGES_READ_TOKEN', '').strip()
+    if not token:
+        raise ValueError('GH_PACKAGES_READ_TOKEN is required: configure a classic PAT with read:packages')
     request = urllib.request.Request(API + path, headers={
-        'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+        'Authorization': 'Bearer ' + token,
         'Accept': 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
     })
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+    try:
+        with opener.open(request, timeout=30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        # Print only bounded structured diagnostics, never raw bodies or headers.
+        message = ''
+        try:
+            payload = json.loads(error.read(4096))
+            if isinstance(payload, dict) and isinstance(payload.get('message'), str):
+                message = ''.join(c for c in payload['message'].replace(token, '[REDACTED]') if c.isprintable())[:256]
+        except (ValueError, UnicodeError):
+            pass
+        raise RuntimeError(f'Package metadata request failed (HTTP {error.code}): {message}') from None
+    except urllib.error.URLError:
+        raise RuntimeError('Package metadata request failed: network error') from None
 
 
 def pages(path, fetch):

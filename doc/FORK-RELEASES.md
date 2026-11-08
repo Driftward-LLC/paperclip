@@ -11,7 +11,7 @@ Enable Actions for the fork and allow the pinned actions used here. Keep default
 workflow token permissions read-only and disable workflow PR approvals. Protect
 `master`: require a PR and the `Fork validation` job from `Fork CI` (confirm its
 exact displayed context from the first PR run). Independently complete Astra review
-under the local three-iteration policy before merging; GitHub does not attest Astra
+until Astra approves and required checks pass before merging; GitHub does not attest Astra
 identity. With one operator, do not require that operator to approve their own PR.
 Review `.github/**`, `scripts/fork-ci/**`, and this runbook as privileged code. Configure a tag ruleset for `driftward-v*` preventing updates/deletion without
 bypass. Tag creation uses existing repository write permission; only operators
@@ -86,10 +86,26 @@ or mutable channel is written. The workflow serializes releases and uses authent
 and version metadata to refuse existing version/SHA tags. A successful empty
 inventory supports the first package publication; HTTP authorization errors,
 missing endpoints, rate limits, malformed data, and network errors fail closed.
-The job token must be allowed to read the organization's visible container-package
-inventory and write this repository's package. If inventory access is denied,
-stop and correct permissions before retrying; do not treat a registry error as an
-absent image. The first live publication is deliberately not exercised here.
+Configure repository Actions secret `GH_PACKAGES_READ_TOKEN` before releasing:
+create a dedicated **personal access token (classic)** with only `read:packages`
+([GitHub scope documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic)),
+from an operator authorized to read this organization's container packages. Do
+not add `repo`, write, or delete scopes. Authorize the token for organization SSO
+if required, set an expiry, and rotate the secret before expiry. Enter it through
+GitHub's secret settings; never commit it, print it, or put it in workflow inputs.
+The token must see the target package when it exists; an incomplete readable
+inventory is not proof that an inaccessible package is absent.
+
+Only the release preflight step receives this token. GHCR login and publication
+continue to use the built-in `GITHUB_TOKEN` with the existing package-write
+permission; the metadata token never publishes. PR CI receives neither release
+credential. GitHub's container-package REST endpoints can reject the built-in
+job token with `400 Invalid argument` even though GHCR login/publishing supports
+it; the dedicated read token avoids relying on that endpoint compatibility.
+Missing/expired/denied metadata credentials and redirects fail closed, with
+bounded error messages. Do not infer absence from registry `403 DENIED`, public
+filters, or REST `404`. Stop and fix access rather than bypassing inventory.
+The first live publication is deliberately not exercised here.
 GHCR does not enforce
 immutable tags: restrict package write access and do not edit tags externally.
 A failed partial publication must be investigated; do not delete/overwrite tags to
