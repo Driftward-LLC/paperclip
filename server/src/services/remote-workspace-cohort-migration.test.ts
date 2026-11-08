@@ -353,13 +353,16 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     expect(await db.select().from(activityLog)).toHaveLength(0);
   });
   it("joins canceled capture peers and rejects late replay before teardown removes their state", async () => {
-    const f = await fixture(), entered = Promise.withResolvers<void>(), aborted = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
+    const f = await fixture();
+    let markEntered!: () => void, markAborted!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { markEntered = resolve; });
+    const aborted = new Promise<void>(resolve => { markAborted = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
     let captures = 0, cleanupFinished = false;
     vi.spyOn(storage, "putFile").mockImplementation(async input => {
-      if (++captures === 2) entered.resolve();
-      input.signal!.addEventListener("abort", () => aborted.resolve(), { once: true });
-      await release.promise;
+      if (++captures === 2) markEntered();
+      input.signal!.addEventListener("abort", markAborted, { once: true });
+      await released;
       input.signal!.throwIfAborted();
       throw new Error("capture unexpectedly continued");
     });
@@ -367,9 +370,9 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
     let cleanup: Promise<void> | undefined;
     const other = createDb(database.connectionString, { maxConnections: 1 });
     try {
-      await entered.promise;
+      await entered;
       cleanup = stopMigrations(f.scope).then(() => { cleanupFinished = true; });
-      await aborted.promise;
+      await aborted;
       expect(cleanupFinished).toBe(false);
       expect((await db.select().from(companies)).some(row => row.id === f.companyId)).toBe(true);
       await expect(run(f)).rejects.toThrow("cohort_test_finished");
@@ -377,7 +380,7 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
       await expect(withWorkspaceSourceLocks(other, { companyId: f.companyId, projectIds: [f.projectId] }, async () => true, true))
         .rejects.toBeInstanceOf(IsolatedRepositorySourceBusy);
     } finally {
-      release.resolve();
+      release();
       await pending;
       await cleanup;
       await other.$client.end({ timeout: 1 });
