@@ -292,7 +292,7 @@ When creating a pull request (via `gh pr create` or any other method), you **mus
 - **Verification** — how a reviewer can confirm it works
 - **Risks** — what could go wrong
 - **Model Used** — the AI model that produced or assisted with the change (provider, exact model ID, context window, capabilities). Write "None — human-authored" if no AI was used.
-- **Checklist** — all items checked
+- **Checklist** — keep only applicable requirements; check an item only after verifying it is complete. Delete inapplicable rows instead of marking them N/A or leaving them unchecked. Keep applicable incomplete items unchecked and report what remains.
 
 ## 11. Definition of Done
 

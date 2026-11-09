@@ -92,6 +92,8 @@
 
 ## Checklist
 
+<!-- Delete rows that do not apply to this change. Check only verified, completed items. Keep applicable incomplete items unchecked. -->
+
 - [ ] I have included a thinking path that traces from project context to this change
 - [ ] I have specified the model used (with version and capability details)
 - [ ] I have checked ROADMAP.md and confirmed this PR does not duplicate planned core work
@@ -104,5 +106,4 @@
 - [ ] I have updated relevant documentation to reflect my changes
 - [ ] I have considered and documented any risks above
 - [ ] All Paperclip CI gates are green
-- [ ] Greptile is 5/5 with no open P2s, recommendations, or follow-ups
-- [ ] I will address all Greptile and reviewer comments before requesting merge
+- [ ] I have addressed all applicable reviewer comments

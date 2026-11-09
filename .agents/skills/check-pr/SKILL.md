@@ -124,7 +124,13 @@ Pipeline statuses: `running`, `pending`, `success`, `failed`, `canceled`, `skipp
 
 **Perforce:** Perforce doesn't have built-in CI checks natively. If the team uses a review tool (Swarm, etc.) or an external CI triggered by shelve events, check the relevant system. Otherwise, proceed to analysis immediately.
 
-### 4. Require a fresh Greptile review for the current head
+### 4. Check required automated reviews for the current head
+
+Apply the Greptile gate below only when the target repository explicitly
+requires that integration. Check repository guidance and required-check settings
+first. An absent integration does not block completion and must not be triggered
+or installed just to satisfy this skill. Still inspect and address any existing
+automated review findings. Preserve all configured required reviews and CI gates.
 
 For GitHub PRs, do not treat an existing Greptile review, comment, or summary as current unless it is tied to the PR's exact current `headRefOid`. This is especially important after pushing a new commit to an existing PR: a Greptile review on an older commit is stale, even if the PR still has a Greptile comment or prior review.
 
@@ -231,6 +237,7 @@ Once all checks are complete, evaluate these areas:
 
 - Is the description complete and follows team conventions?
 - Are all required sections filled in?
+- Have inapplicable checklist rows been deleted, with only verified completed items checked and applicable incomplete items left unchecked?
 - Are there TODOs or placeholders that need updating?
 
 #### C. Review Comments

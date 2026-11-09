@@ -47,31 +47,34 @@ each one).
 * **Migrations**: numbered incrementally with no conflicts against master. If
   master moved and took your number, renumber on top. Make migrations
   **idempotent** so users who already applied the old number are safe.
-* **Greptile file limit**: keep each PR under **100 changed files**; if a PR
-  exceeds that, split it into two.
+* Apply reviewer file limits only when the target repository requires that
+  integration. Split the PR if needed to satisfy its configured limit.
 
 ## 4. Open the PR
 
 * Follow `CONTRIBUTING.md` (repo root,
   https://github.com/paperclipai/paperclip/blob/master/CONTRIBUTING.md) for
-  the PR title, message format, and issue description.
+  the PR title, message format, and issue description. Keep required template
+  sections; delete inapplicable checklist rows rather than leaving N/A or
+  unchecked boxes. Check only verified, completed items; retain applicable
+  incomplete items unchecked and report what remains.
 * Push the branch and open the PR with `gh`.
 * Record the PR URL immediately — every report must include URLs to every PR.
 
 ## 5. Review loops
 
-* Run the **/greploop** company skill: trigger Greptile review, address its
-  comments, push, and repeat until Greptile gives **5/5 with zero unresolved
-  comments** (max 20 turns). Do not stop early while turns remain.
-* Then run the **/prcheckloop** company skill and address any verification /
-  CI failures you can.
-* RUN GREPTILE UNTIL IT GETS TO 5/5 - DO NOT STOP UNTIL GREPTILE IS 5/5, all
-  tests pass, all verification checks pass, and there are no merge conflicts.
+* Follow the target repository's required review process. Address applicable
+  human and automated reviewer findings. If Greptile is a configured required
+  gate, run **/greploop** until its current-head review meets that gate. Do not
+  require or trigger an absent integration.
+* Run the **/prcheckloop** company skill and address verification / CI failures.
+* Continue until required reviews and checks pass and there are no merge
+  conflicts. Follow `AGENTS.md` for reviewer assignment and escalation.
 
 ## 6. Report back and hand off
 
 * Comment on the driving task: what you did, the PR URL(s), the worktree path
-  (use `~` for home), Greptile score, and check status.
+  (use `~` for home), required review results, and check status.
 * Create a `pull_request` work product for each opened PR (plus `branch` /
   `commit` work products where the branch or a commit is itself the handoff).
 * If the task requires follow-up per PR (e.g. sub-issues per PR), create them
