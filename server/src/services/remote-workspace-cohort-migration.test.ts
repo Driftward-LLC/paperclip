@@ -113,27 +113,32 @@ describe.skipIf(!support.supported)("bounded workspace cohort migration", () => 
   it("captures two shared-Git leaves concurrently and restores both after outer commit", async () => {
     const f = await fixture(), held = await recoverable(f), workspaceIds = f.leaves.map(row => row.id), put = storage.putFile.bind(storage);
     let entered = 0, active = 0, maximum = 0, release!: () => void;
-    const barrier = new Promise<void>(resolve => { release = resolve; }), timer = setTimeout(() => release(), 2000);
+    const barrier = new Promise<void>(resolve => { release = resolve; });
     vi.spyOn(storage, "putFile").mockImplementation(async input => {
+      input.signal?.throwIfAborted();
       active++; maximum = Math.max(maximum, active); if (++entered === 2) release();
-      if (entered === 1) {
-        const other = createDb(database.connectionString, { maxConnections: 1 });
-        try {
-          await expect(withWorkspaceSourceLocks(other, { companyId: f.companyId, projectIds: [f.projectId] }, async () => true, true))
-            .rejects.toBeInstanceOf(IsolatedRepositorySourceBusy);
-          await other.transaction(async tx => expect(await tryLockNativeWorkspaceFinalization(tx as unknown as Db, { companyId: f.companyId, runId: held.runId })).toBe(false));
-        } finally { await other.$client.end({ timeout: 1 }); }
-      }
+      // Only peer arrival proves overlap; abort releases captures during teardown.
+      input.signal?.addEventListener("abort", release, { once: true });
       try {
+        if (entered === 1) {
+          const other = createDb(database.connectionString, { maxConnections: 1 });
+          try {
+            await expect(withWorkspaceSourceLocks(other, { companyId: f.companyId, projectIds: [f.projectId] }, async () => true, true))
+              .rejects.toBeInstanceOf(IsolatedRepositorySourceBusy);
+            await other.transaction(async tx => expect(await tryLockNativeWorkspaceFinalization(tx as unknown as Db, { companyId: f.companyId, runId: held.runId })).toBe(false));
+          } finally { await other.$client.end({ timeout: 1 }); }
+        }
         await barrier;
+        input.signal?.throwIfAborted();
         const rows = await db.select().from(executionWorkspaces).where(inArray(executionWorkspaces.id, workspaceIds));
         expect(rows.every(row => !readRemoteWorkspaceAuthority(row.metadata))).toBe(true);
         return await put(input);
-      } finally { active--; }
+      } finally {
+        input.signal?.removeEventListener("abort", release);
+        active--;
+      }
     });
-    try {
-      await expect(run(f, { workspaceIds, concurrency: undefined })).resolves.toMatchObject({ applied: true });
-    } finally { clearTimeout(timer); }
+    await expect(run(f, { workspaceIds, concurrency: undefined })).resolves.toMatchObject({ applied: true });
     expect(maximum).toBe(2);
     await expect(run(f)).resolves.toMatchObject({ applied: true, replayed: true });
     await expect(run(f, { workspaceIds: [f.leaves[0].id] })).rejects.toThrow("workspace_cohort_membership_changed");
