@@ -73,7 +73,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Refuse existing version and SHA tags using authenticated package metadata
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PACKAGES_READ_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN }}
         run: python3 scripts/fork-ci/release-preflight.py
       - name: Build exact checked source without publishing
         run: |

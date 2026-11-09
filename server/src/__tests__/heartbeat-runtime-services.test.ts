@@ -48,7 +48,7 @@ describePostgres("heartbeat runtime services through adapter dispatch", () => {
         captured.set(input.runId, { services: structuredClone(services), primaryUrl: input.context.paperclipRuntimePrimaryUrl, intents: input.context.paperclipRuntimeServiceIntents });
         expect(await fetch(services[0]!.url!).then(response => response.text())).toBe("heartbeat runtime fixture");
         // Stop unfinished-task recovery from racing subsequent fixture runs.
-        await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, String(input.context.issueId)));
+        await db.update(issues).set({ status: "done" }).where(eq(issues.id, String(input.context.issueId)));
         if (failures.has(input.agent.id)) throw new Error("Invalid fixture adapter configuration");
         return { exitCode: 0, signal: null, timedOut: false, resultJson: {}, runtimeServices: [{ id: randomUUID(), serviceName: "adapter-preview", url: "https://preview.example.test/fixture", providerRef: "fixture-preview" }] };
       },
@@ -87,9 +87,12 @@ describePostgres("heartbeat runtime services through adapter dispatch", () => {
   }
 
   async function execute(f: Awaited<ReturnType<typeof seed>>) {
+    await db.update(issues).set({ status: "todo" }).where(eq(issues.id, f.issueId));
+    const dispatchesBefore = captured.size;
     const run = await heartbeat.wakeup(f.agentId, { source: "on_demand", triggerDetail: "manual", reason: "manual", payload: { issueId: f.issueId }, contextSnapshot: { issueId: f.issueId } });
     expect(run).not.toBeNull();
     await heartbeat.drainActiveRunExecutions();
+    expect(captured.size - dispatchesBefore).toBe(1);
     const [finished] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run!.id));
     const services = await db.select().from(workspaceRuntimeServices).where(eq(workspaceRuntimeServices.companyId, f.companyId));
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, f.issueId));
