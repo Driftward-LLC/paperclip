@@ -24,7 +24,7 @@ Affirm that you did this search by checking the dedup-search box in the PR templ
 - Touch the **smallest possible number of files**
 - Make sure the change is very targeted and easy to review
 - All tests pass and CI is green
-- Greptile score is 5/5 with all comments addressed
+- All applicable reviewer comments are addressed
 - Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md)
 
 These almost always get merged quickly when they're clean.
@@ -39,7 +39,7 @@ These almost always get merged quickly when they're clean.
   - Clear description of what & why
   - Proof it works (manual testing notes)
   - All tests passing and CI green
-  - Greptile score 5/5 with all comments addressed
+  - All applicable reviewer comments are addressed
   - [PR template](.github/PULL_REQUEST_TEMPLATE.md) fully filled out
 
 PRs that follow this path are **much** more likely to be accepted, even when they're large.
@@ -51,7 +51,7 @@ PRs that follow this path are **much** more likely to be accepted, even when the
 
 ### Use the PR Template
 
-Every pull request **must** follow the PR template at [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). If you create a PR via the GitHub API or other tooling that bypasses the template, copy its contents into your PR description manually. The template includes required sections: Thinking Path, What Changed, Verification, Risks, Model Used, and a Checklist.
+Every pull request **must** follow the PR template at [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). If you create a PR via the GitHub API or other tooling that bypasses the template, copy its contents into your PR description manually. The template includes required sections: Thinking Path, What Changed, Verification, Risks, Model Used, and a Checklist. Keep the required sections. Delete checklist rows that do not apply to the change. Check only verified, completed items; keep applicable incomplete items unchecked and report what remains. Do not retain inapplicable rows as N/A or unchecked boxes.
 
 ### Link Issues or Describe Them In-PR
 
@@ -128,15 +128,9 @@ If your change adds, removes, or modifies emitted telemetry events, update the [
 
 All Paperclip CI gates (lint, typecheck, tests, build, and any other required checks) must be satisfied before a PR can be merged. Don't ask for a merge while gates are red — fix them first.
 
-### Greptile Review
+### Review Comments
 
-We use [Greptile](https://greptile.com) for automated code review. Your PR must achieve a **5/5 Greptile score** before it can be merged, with:
-
-- **No open P2 (or higher) comments**
-- **No open recommendations**
-- **No open follow-ups**
-
-We hold the bar high here on purpose — we want code quality to be as high as possible. If Greptile leaves comments, fix them (or, if a comment is wrong, reply explaining why) and request a re-review.
+Address all applicable reviewer comments before requesting merge. Fix valid findings or explain why a comment does not apply. Follow the repository's configured review requirements. If an automated reviewer such as Greptile is required, obtain a current review for the PR's latest commit and satisfy that gate. An absent integration is not a requirement to install or trigger it.
 
 ## Helping Other Contributors
 
