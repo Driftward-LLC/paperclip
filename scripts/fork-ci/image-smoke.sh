@@ -8,7 +8,9 @@ cleanup() {
 }
 trap cleanup EXIT
 # Anonymous fresh volume, loopback-only random host port, no agent credentials.
+BETTER_AUTH_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
 docker run -d --name "$name" -p 127.0.0.1::3100 -v /paperclip \
+  -e BETTER_AUTH_SECRET \
   -e PAPERCLIP_DEPLOYMENT_MODE=authenticated \
   -e PAPERCLIP_PUBLIC_URL=http://localhost:3100 \
   -e PAPERCLIP_TELEMETRY_DISABLED=1 -e PAPERCLIP_MIGRATION_AUTO_APPLY=true "$image"

@@ -16,6 +16,11 @@ class ImageSmokeTest(unittest.TestCase):
             commands = {
                 'docker': '''echo "$*" >> "$CALLS"
 case "$1" in
+  run)
+    [ "${#BETTER_AUTH_SECRET}" = 64 ] || exit 1
+    case "$BETTER_AUTH_SECRET" in *[!0-9a-f]*) exit 1;; esac
+    case " $* " in *" -e BETTER_AUTH_SECRET "*) ;; *) exit 1;; esac
+    echo auth-secret-present >> "$CALLS";;
   port) echo '127.0.0.1:54321';;
   inspect) echo "$RUNNING";;
 esac
@@ -35,6 +40,9 @@ esac
             result = subprocess.run(['bash', str(ROOT / 'scripts/fork-ci/image-smoke.sh'), 'test-image'], env=env, capture_output=True, text=True)
             calls = log.read_text()
             self.assertIn('rm -fv fork-image-smoke-', calls)
+            self.assertIn('auth-secret-present', calls)
+            self.assertIn('-e PAPERCLIP_DEPLOYMENT_MODE=authenticated', calls)
+            self.assertNotIn('BETTER_AUTH_SECRET=', calls)
             self.assertIn('-v /paperclip', calls)
             self.assertIn('-p 127.0.0.1::3100', calls)
             return result
