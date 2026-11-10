@@ -4,8 +4,10 @@ import importlib.util
 import io
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -84,9 +86,6 @@ class GitHub:
             if parts.path.endswith('/dispatches'):
                 if self.dispatch_error: raise RuntimeError('Dispatch unavailable')
                 return None
-            if parts.path == '/releases':
-                self.release = copy.deepcopy(data)
-                return self.release
         raise AssertionError((method, path, data))
 
     def writes(self):
@@ -248,50 +247,62 @@ class AutomaticReleaseTest(unittest.TestCase):
 
 
 class ReleaseMetadataTest(unittest.TestCase):
-    def test_new_release_records_exact_image_source_and_run_without_deploying(self):
-        github = GitHub()
-        github.existing_tag()
-        self.assertIn('Published GitHub release', automation.publish_release(SOURCE, 'v2026.1110.0', DIGEST, '18', github))
-        self.assertEqual(github.release['target_commitish'], SOURCE)
-        self.assertIn(automation.IMAGE + '@' + DIGEST, github.release['body'])
-        self.assertIn('/actions/runs/18', github.release['body'])
-        self.assertIn('Deployment remains manual', github.release['body'])
-        self.assertFalse(github.release['draft'])
-        self.assertFalse(github.release['prerelease'])
-        self.assertEqual([path for _, path, _ in github.writes()], ['/releases'])
+    def test_preflight_is_read_only_for_new_and_existing_public_releases(self):
+        for release in [None, {'tag_name': TAG, 'draft': False, 'body': 'Human release notes'}]:
+            github = GitHub()
+            github.existing_tag()
+            github.release = copy.deepcopy(release)
+            for _ in range(2):
+                self.assertFalse(automation.verify_metadata(SOURCE, 'v2026.1110.0', DIGEST, github))
+            self.assertEqual(github.release, release)
+            self.assertEqual(github.writes(), [])
 
-    def test_metadata_retry_preserves_existing_public_manual_notes(self):
+    def test_prerelease_classification_preserves_manual_tag_behavior(self):
         github = GitHub()
-        github.existing_tag()
-        github.release = {'tag_name': TAG, 'draft': False, 'body': 'Human release notes'}
-        self.assertIn('preserved', automation.publish_release(SOURCE, 'v2026.1110.0', DIGEST, '18', github))
-        self.assertEqual(github.release['body'], 'Human release notes')
+        github.existing_tag(TAG + '-rc.1')
+        self.assertTrue(automation.verify_metadata(SOURCE, 'v2026.1110.0-rc.1', DIGEST, github))
         self.assertEqual(github.writes(), [])
 
-    def test_metadata_only_retry_recovers_an_ambiguous_create_without_republishing(self):
-        github = GitHub()
-        github.existing_tag()
-        def ambiguous(method, path, data=None, **kwargs):
-            result = github(method, path, data, **kwargs)
-            if method == 'POST' and path == '/releases':
-                raise RuntimeError('Release response lost')
-            return result
-        with self.assertRaisesRegex(RuntimeError, 'response lost'):
-            automation.publish_release(SOURCE, 'v2026.1110.0', DIGEST, '18', ambiguous)
-        self.assertIn('preserved', automation.publish_release(SOURCE, 'v2026.1110.0', DIGEST, '18', github))
-        self.assertEqual([path for _, path, _ in github.writes()], ['/releases'])
-
-    def test_invalid_digest_source_draft_and_conflicting_tag_never_mutate_metadata(self):
+    def test_invalid_digest_source_draft_and_conflicting_tag_never_pass_preflight(self):
         for digest in ['latest', 'sha256:bad']:
-            with self.assertRaises(ValueError): automation.publish_release(SOURCE, 'v2026.1110.0', digest, '18', GitHub())
-        github = GitHub()
-        github.existing_tag(sha=OTHER)
-        with self.assertRaisesRegex(ValueError, 'immutable tag'): automation.publish_release(SOURCE, 'v2026.1110.0', DIGEST, '18', github)
+            with self.assertRaises(ValueError): automation.verify_metadata(SOURCE, 'v2026.1110.0', digest, GitHub())
+        for sha in [None, OTHER]:
+            github = GitHub()
+            if sha: github.existing_tag(sha=sha)
+            with self.assertRaisesRegex(ValueError, 'immutable tag'): automation.verify_metadata(SOURCE, 'v2026.1110.0', DIGEST, github)
+            self.assertEqual(github.writes(), [])
         for release in [{'tag_name': TAG, 'draft': True}, {'tag_name': 'wrong', 'draft': False}]:
             github = GitHub()
             github.existing_tag()
             github.release = release
-            with self.assertRaises(ValueError): automation.publish_release(SOURCE, 'v2026.1110.0', DIGEST, '18', github)
+            with self.assertRaises(ValueError): automation.verify_metadata(SOURCE, 'v2026.1110.0', DIGEST, github)
+            self.assertEqual(github.writes(), [])
+
+    def test_preflight_cli_emits_action_input_without_writing_to_github(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output, summary = Path(directory) / 'output', Path(directory) / 'summary'
+            environment = {'GITHUB_REPOSITORY': automation.REPOSITORY, 'GITHUB_TOKEN': 'test-token',
+                'REVISION': SOURCE, 'VERSION': 'v2026.1110.0', 'DIGEST': DIGEST,
+                'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary)}
+            responses = [io.BytesIO(json.dumps({'ref': 'refs/tags/' + TAG,
+                'object': {'type': 'commit', 'sha': SOURCE}}).encode()),
+                io.BytesIO(json.dumps({'tag_name': TAG, 'draft': False, 'body': 'Human notes'}).encode())]
+            with patch.dict(os.environ, environment, clear=True), patch('sys.argv', ['release-automation.py', 'verify-metadata']), patch('urllib.request.build_opener') as build, patch('sys.stdout', new_callable=io.StringIO):
+                build.return_value.open.side_effect = responses
+                runpy.run_path(str(Path(automation.__file__)), run_name='__main__')
+            self.assertEqual(output.read_text(), 'prerelease=false\n')
+            self.assertEqual(summary.read_text(), 'Verified published image metadata\n')
+            self.assertEqual([call.args[0].get_method() for call in build.return_value.open.call_args_list], ['GET', 'GET'])
+
+    def test_preflight_api_errors_do_not_become_absent_releases(self):
+        for failure in ['HTTP 401', 'HTTP 403', 'HTTP 429', 'network error']:
+            github = GitHub()
+            github.existing_tag()
+            def failed(method, path, data=None, **kwargs):
+                if path.startswith('/releases/tags/'): raise RuntimeError(failure)
+                return github(method, path, data, **kwargs)
+            with self.assertRaisesRegex(RuntimeError, failure):
+                automation.verify_metadata(SOURCE, 'v2026.1110.0', DIGEST, failed)
             self.assertEqual(github.writes(), [])
 
 
@@ -328,6 +339,28 @@ class WorkflowBoundaryTest(unittest.TestCase):
         self.assertEqual(auto['steps'][0]['with'], {'ref': '${{ github.sha }}', 'persist-credentials': False})
         self.assertEqual(workflow['jobs']['release_metadata']['permissions'], {'contents': 'write'})
         self.assertEqual(workflow['jobs']['release_metadata']['needs'], ['source', 'publish'])
+        metadata = workflow['jobs']['release_metadata']
+        self.assertNotIn('if', metadata)
+        preflight, release = metadata['steps'][-2:]
+        self.assertEqual(preflight['id'], 'metadata')
+        self.assertEqual(preflight['run'], 'python3 scripts/fork-ci/release-automation.py verify-metadata')
+        self.assertEqual(preflight['env'], {'GITHUB_TOKEN': '${{ secrets.GITHUB_TOKEN }}',
+            'REVISION': '${{ needs.source.outputs.sha }}', 'VERSION': '${{ needs.source.outputs.version }}',
+            'DIGEST': '${{ needs.publish.outputs.digest }}'})
+        self.assertEqual(release['uses'], 'ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd')
+        inputs = release['with']
+        self.assertEqual(set(inputs), {'tag', 'commit', 'body', 'prerelease', 'makeLatest', 'skipIfReleaseExists',
+            'allowUpdates', 'immutableCreate', 'replacesArtifacts'})
+        self.assertEqual(inputs['tag'], 'driftward-${{ needs.source.outputs.version }}')
+        self.assertEqual(inputs['commit'], '${{ needs.source.outputs.sha }}')
+        self.assertEqual(inputs['prerelease'], '${{ steps.metadata.outputs.prerelease }}')
+        self.assertEqual(inputs['makeLatest'], 'legacy')
+        self.assertTrue(inputs['skipIfReleaseExists'])
+        for name in ['allowUpdates', 'immutableCreate', 'replacesArtifacts']: self.assertFalse(inputs[name])
+        self.assertIn('ghcr.io/driftward-llc/paperclip@${{ needs.publish.outputs.digest }}', inputs['body'])
+        self.assertIn('Source: `${{ needs.source.outputs.sha }}`', inputs['body'])
+        self.assertIn('/actions/runs/${{ github.run_id }}', inputs['body'])
+        self.assertIn('Deployment remains manual.', inputs['body'])
         self.assertEqual(workflow['jobs']['publish']['permissions'], {'contents': 'read', 'packages': 'write'})
         self.assertEqual(workflow['jobs']['checks']['uses'], './.github/workflows/fork-ci.yml')
         ci = yaml.safe_load((ROOT / '.github/workflows/fork-ci.yml').read_text())

@@ -104,11 +104,14 @@ that SHA, builds once, checks health and HTML using a fresh anonymous data volum
 and pushes that same smoke-tested image. The smoke creates no companies/agents
 and uses no provider credentials or host data. Only the publish job has package
 write permission. The run summary records the source SHA and image digest.
-Only after that job succeeds, a separate job with `contents: write` creates the
-GitHub release, recording the digest, source SHA, and build link. An existing
+Only after that job succeeds, a separate job with `contents: write` verifies the
+immutable source and uses the pinned Marketplace **Create Release** action
+(`ncipollo/release-action`) to record the digest, source SHA, and build link.
+Release updates and artifact replacement are disabled. An existing
 public release for the same immutable tag and SHA keeps its human-authored notes.
-A conflicting or draft release is left unchanged. If only metadata publication
-fails, rerun the failed job rather than rebuilding or republishing the image.
+A conflicting or draft release fails verification and is left unchanged. If only
+metadata publication fails, rerun the failed job rather than rebuilding or
+republishing the image.
 Actual deployment remains a separate manual decision.
 
 Published tags are `v2026.1107.0` and `sha-<full-40-character-commit>`; no `latest`
