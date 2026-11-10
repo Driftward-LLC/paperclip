@@ -1,5 +1,10 @@
 name: Docker release
+run-name: ${{ github.event_name == 'workflow_run' && format('Release from CI {0}', github.event.workflow_run.id) || format('Docker release / {0}', inputs.tag || github.ref_name) }}
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
   push:
     tags: ['driftward-v*']
   workflow_dispatch:
@@ -11,9 +16,33 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fork-docker-release
+  group: ${{ github.event_name == 'workflow_run' && 'fork-automatic-release' || 'fork-docker-release' }}
   cancel-in-progress: false
 jobs:
+  automatic_start:
+    if: >-
+      ${{ github.repository == 'Driftward-LLC/paperclip' &&
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'master' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          (github.event.workflow_run.path == '.github/workflows/fork-ci.yml' ||
+           github.event.workflow_run.path == '.github/workflows/fork-ci.yml@master') &&
+          github.event.workflow_run.head_repository.full_name == 'Driftward-LLC/paperclip' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Reserve an exact-source tag and dispatch its release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/fork-ci/release-automation.py start
   source:
     if: github.repository == 'Driftward-LLC/paperclip' && (github.event_name == 'push' || startsWith(github.ref, 'refs/tags/driftward-v'))
     runs-on: ubuntu-latest
@@ -47,6 +76,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: fork-release
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -86,6 +117,7 @@ jobs:
       - name: Smoke fresh image without agents or host data
         run: bash scripts/fork-ci/image-smoke.sh "$IMAGE:$VERSION"
       - name: Publish checked and smoke-tested image
+        id: image
         run: |
           set -euo pipefail
           docker tag "$IMAGE:$VERSION" "$IMAGE:sha-$REVISION"
@@ -93,4 +125,24 @@ jobs:
           docker push "$IMAGE:sha-$REVISION"
           digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{.Manifest.Digest}}')
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           printf '### Fork image release\n\nSource: `%s`\n\nPull: `%s@%s`\n' "$REVISION" "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+  release_metadata:
+    name: Publish GitHub release
+    needs: [source, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Record the published image without deploying
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVISION: ${{ needs.source.outputs.sha }}
+          VERSION: ${{ needs.source.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: python3 scripts/fork-ci/release-automation.py publish
