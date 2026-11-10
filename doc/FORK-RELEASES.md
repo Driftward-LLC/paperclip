@@ -2,11 +2,10 @@
 
 This fork publishes only the self-hosted `production` target of the existing
 Dockerfile, for Linux amd64, to `ghcr.io/driftward-llc/paperclip`. It does not
-publish npm packages or deploy. The inherited `release.yml`, `refresh-lockfile.yml`,
-`cloud-migrator-artifacts.yml`, `docker.yml`, and `cloud-readiness.yml` definitions
-are removed. Remaining inherited Actions jobs are guarded to run only in
-`paperclipai/paperclip`; shared release scripts and their tests remain for
-upstream synchronization.
+publish npm packages or deploy. Only `fork-ci.yml` (`CI`) and
+`fork-release.yml` (`Docker release`) remain in `.github/workflows`; inherited
+upstream workflow definitions are removed. Shared release scripts and their
+tests remain for upstream synchronization.
 
 ## GitHub setup
 
@@ -23,14 +22,9 @@ should create release tags. Create environment
 no extra approval click is required. Grant this repository's GITHUB_TOKEN write
 access to its GHCR package. Keep unrelated secrets out of the repository/environment.
 
-Before the bootstrap PR, leave all inherited workflow IDs disabled, especially
-scheduled, release, cloud, agent-runtime, and privileged PR workflows. Enabling
-Actions globally on an old default branch can activate inherited schedules before
-this PR merges. Enable only CI for bootstrap; workflows may register
-only after the first PR event. During this fork's bootstrap, 13 inherited IDs
-registered and were explicitly disabled; do not infer registration from source
-files alone. After merge confirm the only fork-executable definitions are
-`fork-ci.yml` and `fork-release.yml`.
+Keep retired upstream workflow IDs disabled. GitHub can retain their historical
+registrations after their definitions are removed. Enable only `CI` and `Docker
+release`, and confirm their source files are `fork-ci.yml` and `fork-release.yml`.
 
 ## Branch, review, and merge
 
@@ -38,8 +32,8 @@ Start a `codex/` branch from current fork `master`. Install with Node 24.11+ and
 pnpm 9.15.4 using `pnpm install --frozen-lockfile`. Run `pnpm build`,
 `pnpm -r typecheck`, `pnpm test:run`, and
 `python3 -m unittest discover -s scripts/fork-ci -p 'test_*.py'`.
-Validation additionally runs all 17 inherited Node test files referencing
-retained workflow definitions and shared release scripts alongside fork guards.
+Validation additionally runs 16 Node contract files for shared scripts alongside
+the workflow policy checks.
 CI builds/typechecks once, then runs every row from the checked-in upstream
 unit matrix: currently 19 general and nine serialized partitions, with at most
 six test runners in parallel. The workflow uses the name `CI`; upstream's
@@ -65,9 +59,9 @@ validation evidence. After required CI and review pass, merge through the protec
 branch. PR jobs use hosted runners, read-only tokens, no deployment credentials,
 and no upstream-owned reusable workflows. Ordinary master pushes never publish.
 
-When synchronizing upstream, retain these fork workflows, keep the five removed
-definitions absent, and retain the upstream-only job guards. The workflow policy test
-fails when an inherited job lacks its repository guard. Review script changes as executable code;
+When synchronizing upstream, retain these two fork workflows and keep upstream
+workflow definitions absent. Workflow policy rejects extra definitions, upstream
+repository references, and missing local reusable workflows. Review script changes as executable code;
 CI runs scripts from the checked revision. CI intentionally runs the full
 unit suite rather than upstream paid/live-agent qualification campaigns.
 

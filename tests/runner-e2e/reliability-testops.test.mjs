@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parse } from 'yaml';
 import { productRegressionCases, projectProductResults, selectProductRegression, testOpsPlanDetails, testOpsPlans,
   validateSelection, workflowUrl } from './product-regression-testops.mjs';
 import { productTestOps } from './product-regression-testops-cli.mjs';
@@ -307,36 +306,4 @@ test('a plan TestOps reports only as a job-less row is unassigned, so registrati
   assert.equal(repaired.created.assignment, true);
   assert.deepEqual(state.assignments.map(row => row.job?.id), [50]);
   assert.equal(registrationReceipt('register', repaired, { GITHUB_RUN_ID: '1', GITHUB_SHA: workflowSha }).complete, true);
-});
-
-test('the workflows expose the reliability plan without new provider or reporting authority', async () => {
-  const full = parse(await readFile(new URL('../../.github/workflows/runner-full-stack-e2e.yml', import.meta.url), 'utf8'));
-  assert.deepEqual(full.on.workflow_dispatch.inputs.testops_plan.options, ['product-regression', 'reliability']);
-  assert.equal(full.on.workflow_dispatch.inputs.testops_plan.default, 'product-regression');
-  // Not run per PR or on the bounded cron: only a TestOps launch or manual dispatch selects the plan.
-  assert.deepEqual(Object.keys(full.on).sort(), ['schedule', 'workflow_dispatch']);
-  const selectionStep = full.jobs.testops_selection.steps.find(step => step.id === 'selection');
-  assert.equal(selectionStep.env.TESTOPS_PLAN, "${{ inputs.testops_plan || 'product-regression' }}");
-  const testEnv = full.jobs.test.steps.flatMap(step => Object.entries(step.env ?? {}));
-  assert.ok(testEnv.some(([name, value]) => name === 'OPENROUTER_API_KEY' && value === "${{ matrix.credentialName == 'OPENROUTER_API_KEY' && secrets.OPENROUTER_API_KEY || '' }}"));
-  assert.ok(testEnv.some(([name, value]) => name === 'DAYTONA_API_KEY' && value === "${{ matrix.environmentId == 'daytona' && secrets.DAYTONA_API_KEY || '' }}"));
-  const opencodeSteps = full.jobs.test.steps.filter(step => /OpenCode executable|remote provider pack/.test(step.name ?? ''));
-  assert.ok(opencodeSteps.length >= 3);
-  assert.ok(opencodeSteps.every(step => String(step.if).includes("startsWith(matrix.profileId, 'runner-opencode')")));
-  const registration = parse(await readFile(new URL('../../.github/workflows/runner-e2e-testops-registration.yml', import.meta.url), 'utf8'));
-  assert.deepEqual(Object.keys(registration.on), ['workflow_dispatch']);
-  assert.equal(registration.jobs.register.environment, 'runner-e2e-testops-reporting');
-  assert.deepEqual(registration.jobs.register.needs, 'authorize');
-  // The only gate in front of ALLURE_TOKEN: default branch plus the numeric actor allowlist.
-  const gate = registration.jobs.authorize.steps[0];
-  assert.equal(gate.env.ALLOWED_ACTOR_IDS, '${{ vars.RUNNER_E2E_ALLOWED_ACTOR_IDS }}');
-  assert.equal(gate.env.REF, '${{ github.ref }}');
-  assert.match(gate.run, /if \[ "\$REF" != "refs\/heads\/\$DEFAULT_BRANCH" \]; then/);
-  assert.match(gate.run, /type == "array" and length > 0 and all\(\.\[\]; type == "number"/);
-  assert.match(gate.run, /for candidate in "\$triggering_actor_id" "\$ACTOR_ID"; do/);
-  assert.equal(registration.jobs.authorize.environment, undefined);
-  assert.equal(JSON.stringify(registration.jobs.authorize).includes('secrets.'), false);
-  const text = JSON.stringify(registration);
-  assert.doesNotMatch(text, /secrets\.(OPENAI|OPENROUTER|ANTHROPIC|DAYTONA)/);
-  assert.equal(registration.jobs.register.steps[0].with.ref, '${{ github.sha }}');
 });

@@ -51,7 +51,7 @@ jobs:
       - run: python3 -m pip install PyYAML==6.0.2
       - name: Workflow policy tests
         run: python3 -m unittest discover -s scripts/fork-ci -p 'test_*.py'
-      - name: Inherited workflow contracts
+      - name: Script contracts
         run: |
           node --test \
             scripts/__tests__/e2e-shard.test.mjs \
@@ -65,7 +65,6 @@ jobs:
             scripts/__tests__/storybook-deploy.test.mjs \
             scripts/ci/test-selection-pr-timings.test.mjs \
             scripts/ci/test-selection-timings.test.mjs \
-            scripts/ci/test-selection-workflow.test.mjs \
             scripts/cloud-migrator-artifacts.test.mjs \
             scripts/cloud-source-verification.test.mjs \
             scripts/preview-artifacts.test.mjs \

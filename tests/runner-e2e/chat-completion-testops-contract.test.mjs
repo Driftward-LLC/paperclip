@@ -2,34 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parse } from 'yaml';
 import { admitDispatch, cases, targetSha, validateSelection, evidencePolicy } from './chat-completion-testops-contract.mjs';
 import { actualContext } from './chat-completion-testops-cli.mjs';
 import { fullCatalogCases, catalogTargetSha, catalogLauncherSha256 } from './chat-full-catalog-testops-manifest.mjs';
-import { paidWorker } from './chat-completion-testops-host-control.mjs';
-
-test('reusable workers bind named environment secrets without inherited or extra credentials', async () => {
-  const definition = parse(await readFile(new URL('../../.github/workflows/chat-catalog-testops.yml', import.meta.url), 'utf8'));
-  const called = parse(await readFile(new URL('../../.github/workflows/chat-catalog-testops-case.yml', import.meta.url), 'utf8'));
-  const named = { OPENROUTER_API_KEY: '${{ secrets.OPENROUTER_API_KEY }}',
-    ANTHROPIC_API_KEY: '${{ secrets.ANTHROPIC_API_KEY }}', ALLURE_TOKEN: '${{ secrets.ALLURE_TOKEN }}' };
-  const supported = structuredClone(definition);
-  for (const id of ['chat', 'chat_external']) supported.jobs[id].secrets = { ...named };
-  assert.equal(paidWorker(supported, called), called.jobs.chat);
-  assert.equal(paidWorker(definition, called), called.jobs.chat);
-  for (const id of ['chat', 'chat_external']) {
-    assert.deepEqual(definition.jobs[id].secrets, named);
-    for (const secrets of [{ ...named, OPENROUTER_API_KEY: '' }, { ...named, EXTRA: '${{ secrets.EXTRA }}' },
-      { ...named, ALLURE_TOKEN: '${{ secrets.OTHER_TOKEN }}' }, 'inherit']) {
-      const mutant = structuredClone(supported); mutant.jobs[id].secrets = secrets;
-      assert.throws(() => paidWorker(mutant, called), /Workflow caller boundary mismatch/);
-    }
-  }
-});
 
 function fixture() {
   const env = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'paperclipai/paperclip',
@@ -118,34 +96,6 @@ test('the executable guard binds the actual original GitHub run before service o
     await assert.rejects(actualContext({ ...env, GITHUB_RUN_ID: '../other' }, () => assert.fail('no request before numeric admission')));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
-
-test('target checkout cannot populate or overwrite the trusted helper path', async () => {
-  const definition = parse(await readFile(new URL('../../.github/workflows/chat-catalog-testops.yml', import.meta.url), 'utf8'));
-  const called = parse(await readFile(new URL('../../.github/workflows/chat-catalog-testops-case.yml', import.meta.url), 'utf8'));
-  const jobs = [definition.jobs.build, called.jobs.chat];
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'testops-checkout-boundary-')));
-  try {
-    const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], { cwd: root, stdio: 'pipe' });
-    git('init'); await writeFile(path.join(root, 'fixture.txt'), 'normal target'); git('add', '.');
-    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'normal target');
-    for (const job of jobs) {
-      const target = job.steps.findIndex(step => ['${{ needs.authorize.outputs.target_sha }}', '${{ inputs.target_sha }}'].includes(step.with?.ref));
-      const boundary = job.steps.findIndex(step => step.id === 'target_boundary');
-      const trusted = job.steps.findIndex(step => step.with?.path === '.testops-trusted');
-      assert.ok(target >= 0 && boundary > target && trusted > boundary, 'Reject reserved target paths, then check out trusted main last');
-      assert.notEqual(job.steps[target].with.clean, false);
-      execFileSync('bash', ['-euo', 'pipefail', '-c', job.steps[boundary].run], { cwd: root, stdio: 'pipe' });
-    }
-    await mkdir(path.join(root, '.testops-trusted'));
-    await writeFile(path.join(root, '.testops-trusted', 'helper.js'), 'candidate-controlled helper'); git('add', '.testops-trusted');
-    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'reserved path in target');
-    for (const job of jobs) {
-      const guard = job.steps.find(step => step.id === 'target_boundary');
-      assert.throws(() => execFileSync('bash', ['-euo', 'pipefail', '-c', guard.run], { cwd: root, stdio: 'pipe' }));
-    }
-  } finally { await rm(root, { recursive: true, force: true }); }
-});
-
 
 test('full catalog evidence authority binds every singleton to the reviewed candidate launcher', () => {
   const manifest = JSON.parse(readFileSync(new URL('./chat-full-catalog-testops-manifest.json', import.meta.url)));

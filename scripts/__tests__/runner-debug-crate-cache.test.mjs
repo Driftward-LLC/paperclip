@@ -86,23 +86,3 @@ test("debug cache keys invalidate source, included inputs, deletions and compile
   execFileSync("git", ["add", "."], { cwd: root });
   assert.notEqual(debugKey(root, env), first);
 });
-
-test("PRs only restore exact debug keys and only verified master pushes publish them", () => {
-  const pr = readFileSync(".github/workflows/pr-trusted.yml", "utf8");
-  const release = readFileSync(".github/workflows/release-verify.yml", "utf8");
-  const step = (source, name) => source.split(`      - name: ${name}\n`)[1]?.split("      - name:")[0];
-  const reader = step(pr, "Restore the Runner debug crate (read only)");
-  assert.match(reader, /actions\/cache\/restore@/);
-  assert.match(reader, /hashFiles\('scripts\/runner-debug-crate-cache.mjs'\) != ''/);
-  assert.doesNotMatch(reader, /restore-keys/);
-  for (const field of ["key", "paths"]) assert.ok(reader.includes(`steps.runner_debug_crate_key.outputs.${field}`));
-  assert.equal(step(pr, "Save the Runner debug crate"), undefined);
-  for (const name of ["Compute the Runner debug crate cache key", "Check for this push's Runner debug crate",
-    "Clean debug test variants before publishing workspace binaries", "Save the Runner debug crate"]) {
-    const body = step(release, name);
-    assert.match(body, /matrix.lane == 'rust' && github.repository == 'paperclipai\/paperclip' && github.event_name == 'push' && github.ref == 'refs\/heads\/master' && inputs.ref == github.sha/);
-  }
-  assert.match(step(release, "Save the Runner debug crate"), /runner_debug_crate.outputs.cache-hit != 'true'/);
-  assert.match(step(release, "Warm debug dependencies for the shared Runner cache"), /build:rust/);
-  assert.ok(release.indexOf("Warm debug dependencies") < release.indexOf("Save the Runner debug crate"));
-});

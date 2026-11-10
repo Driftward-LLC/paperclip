@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 import { fileTiming, timingPrefix } from "./test-timing-reporter.mjs";
 import { parseTimings, updatedDurations, validateRun } from "./refresh-test-durations.mjs";
 
@@ -47,8 +46,4 @@ test("only successful same-repository master push verification can supply weight
     { conclusion: "failure" }, { status: "in_progress" }, { path: ".github/workflows/pr.yml" }, { run_attempt: 0 }]) {
     assert.throws(() => validateRun({ ...run, ...override }));
   }
-  const workflow = readFileSync(".github/workflows/ci-test-durations.yml", "utf8");
-  assert.match(workflow, /runs-on: ubuntu-latest/);
-  assert.match(workflow, /github.ref == 'refs\/heads\/master'/);
-  assert.doesNotMatch(workflow, /pull_request_target|runs-on\/fleet|--force/);
 });

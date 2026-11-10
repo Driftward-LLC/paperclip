@@ -108,50 +108,6 @@ test("workspace lanes cover every non-server project in the root Vitest configur
   assert.deepEqual(actual, expected, "no configured project may be silently omitted or run twice");
 });
 
-// Collects every `- group:` matrix entry in a workflow with the keys it sets.
-// Comment and blank lines are dropped first, and an entry ends only when the
-// indentation returns to the item level, so a comment between two keys cannot
-// hide a shard setting from the assertions below.
-function matrixEntries(text) {
-  const entries = [];
-  let current = null;
-  for (const line of text.split("\n")) {
-    if (/^\s*(#|$)/.test(line)) continue;
-    const indent = line.match(/^ */)[0].length;
-    const item = line.match(/^ *- group: (\S+)/);
-    if (item) {
-      current = { group: item[1], indent, keys: ["group"] };
-      entries.push(current);
-      continue;
-    }
-    if (!current) continue;
-    if (indent <= current.indent) { current = null; continue; }
-    const key = line.match(/^ *([A-Za-z_]+):/);
-    if (key) current.keys.push(key[1]);
-  }
-  return entries;
-}
-
-test("matrixEntries sees shard keys that sit behind comments or later in the entry", () => {
-  const entries = matrixEntries([
-    "        include:",
-    "          - group: general-workspaces-b",
-    "            group_label: workspaces-b",
-    "            # a comment between keys must not hide the shard setting",
-    "            shard_index: 0",
-    "",
-    "            shard_count: 3",
-    "          - group: general-workspaces-c",
-    "            group_label: workspaces-c",
-    "      steps:",
-    "        - name: unrelated",
-    "          shard_index: 9",
-  ].join("\n"));
-  assert.deepEqual(entries.map(entry => entry.group), ["general-workspaces-b", "general-workspaces-c"]);
-  assert.deepEqual(entries[0].keys, ["group", "group_label", "shard_index", "shard_count"]);
-  assert.deepEqual(entries[1].keys, ["group", "group_label"], "keys after the matrix must not leak into the last entry");
-});
-
 test("workspaces-c runs the db project alone and workspaces-b no longer carries it", () => {
   // The db project was 168-250s of the 436-513s workspaces-b vitest time
   // (PR runs 38084171761, 38083084276 and 38083020834, 2026-10-10), so it
@@ -162,22 +118,16 @@ test("workspaces-c runs the db project alone and workspaces-b no longer carries 
   const workspacesB = dryRunJson(["--mode", "general", "--group", "general-workspaces-b"]);
   assert.ok(!workspacesB.workspaceProjects.includes("@paperclipai/db"), "db must not run twice");
   assert.ok(workspacesB.workspaceProjects.length > 0, "workspaces-b must still run its other projects");
-  for (const workflow of ["pr-trusted.yml", "release-verify.yml"]) {
-    const entries = workflow === "pr-trusted.yml"
-      ? JSON.parse(readFileSync(path.join(repoRoot, ".github/ci-task-matrix.json"), "utf8")).general_tests
-        .map((entry) => ({ ...entry, keys: Object.keys(entry) }))
-      : matrixEntries(readFileSync(path.join(repoRoot, ".github", "workflows", workflow), "utf8"));
-    // The parser must demonstrably see shard keys in this workflow, otherwise
-    // the unsharded assertions below could pass for the wrong reason.
-    const sharded = entries.filter(entry => entry.group === "general-workspaces-a");
-    assert.ok(sharded.length > 0 && sharded.every(entry => entry.keys.includes("shard_index") && entry.keys.includes("shard_count")),
-      `${workflow} must carry the sharded workspaces-a entries`);
-    for (const group of ["general-workspaces-b", "general-workspaces-c"]) {
-      const matching = entries.filter(entry => entry.group === group);
-      assert.equal(matching.length, 1, `${workflow} must run ${group} exactly once`);
-      assert.ok(matching[0].keys.includes("group_label"), `${workflow} must label the ${group} job`);
-      assert.deepEqual(matching[0].keys.filter(key => key.startsWith("shard_")), [], `${workflow} must run ${group} unsharded`);
-    }
+  const entries = JSON.parse(readFileSync(path.join(repoRoot, ".github/ci-task-matrix.json"), "utf8"))
+    .general_tests.map((entry) => ({ ...entry, keys: Object.keys(entry) }));
+  const sharded = entries.filter(entry => entry.group === "general-workspaces-a");
+  assert.ok(sharded.length > 0 && sharded.every(entry => entry.keys.includes("shard_index") && entry.keys.includes("shard_count")),
+    "the canonical matrix must carry the sharded workspaces-a entries");
+  for (const group of ["general-workspaces-b", "general-workspaces-c"]) {
+    const matching = entries.filter(entry => entry.group === group);
+    assert.equal(matching.length, 1, `the canonical matrix must run ${group} exactly once`);
+    assert.ok(matching[0].keys.includes("group_label"), `the canonical matrix must label ${group}`);
+    assert.deepEqual(matching[0].keys.filter(key => key.startsWith("shard_")), [], `${group} must run unsharded`);
   }
 });
 
@@ -445,16 +395,7 @@ test("shard flags are rejected for the native-runner group", () => {
   assert.notEqual(result.status, 0, "the native-runner lane is a single suite and must not accept shard flags");
 });
 
-// The PR-side exclusion above is safe only while the wiring it assumes holds:
-// pr.yml (the caller whose name reusable pr-trusted.yml jobs see as
-// GITHUB_WORKFLOW) is named PR, the package vitest lanes cover every
-// partition exactly once, exactly one lane runs the native-runner group, and
-// those lanes' package script routes through the wrapper.
-test("the PR workflow wiring for the native-runner lane holds", () => {
-  const prWorkflow = readFileSync(path.join(repoRoot, ".github/workflows/pr.yml"), "utf8");
-  assert.match(prWorkflow, /^name: PR$/m,
-    "renaming pr.yml silently moves the native-runner suite back into the uncached server shards");
-
+test("the Runner package lane matrix retains complete native-runner coverage", () => {
   const matrix = JSON.parse(readFileSync(path.join(repoRoot, ".github/ci-task-matrix.json"), "utf8"));
   const vitestLanes = matrix.verify_paperclip_runner.filter((entry) => entry.command.startsWith("test:typescript:vitest"));
   for (const entry of vitestLanes) {
@@ -621,7 +562,6 @@ test("filtered collection must match the exact assigned case identities, includi
   }
 });
 
-
 test("parallel chat jobs form a complete disjoint partition", () => {
   for (const count of [2, 3, 4]) {
     const shards = Array.from({ length: count }, (_, index) =>
@@ -774,7 +714,6 @@ test("default chat isolation keeps shared-database execution monolithic and seri
   assert.ok(!excluded.includes(nativeRunnerSuitePath.replace(/^server\//, "")));
   assert.deepEqual(events.map(event => event.edge), Array.from({ length: events.length / 2 }, () => ["begin", "end"]).flat());
 });
-
 
 test("a failed chat child fails the job after its sibling finishes", { skip: process.platform === "win32" }, () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "chat-launch-proof-"));

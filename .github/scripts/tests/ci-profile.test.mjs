@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, readFileSync, existsSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -118,29 +118,6 @@ test("complete reporter pairs count without launcher intent, and long test names
   assert.equal(trace.events[0].data["ci.profile_complete"], true);
   assert.equal(trace.events[0].data["ci.test_count"], 1);
   assert.equal(trace.events.find((event) => event.data["ci.kind"] === "test").data.name.length, 256);
-});
-
-test("trusted policy commands work with both current and pre-profile checkouts", () => {
-  const source = readFileSync(new URL("../../workflows/pr-trusted.yml", import.meta.url), "utf8");
-  const block = source.split("      - name: Select compatible Node test command\n")[1].split("\n      - name:")[0];
-  const script = block.split("        run: |\n")[1].split("\n").map((line) => line.replace(/^ {10}/, "")).join("\n");
-  const directory = mkdtempSync(path.join(tmpdir(), "ci-profile-legacy-"));
-  try {
-    writeFileSync(path.join(directory, "probe.test.cjs"), 'require("node:test")("old checkout works", () => {});');
-    for (const current of [false, true]) {
-      if (current) {
-        mkdirSync(path.join(directory, "scripts"));
-        symlinkSync(fileURLToPath(new URL("../../../scripts/ci-profile", import.meta.url)), path.join(directory, "scripts/ci-profile"));
-      }
-      const env = { ...process.env, GITHUB_ENV: path.join(directory, "env"), PAPERCLIP_CI_PROFILE: "false" };
-      delete env.NODE_TEST_CONTEXT;
-      const result = spawnSync("bash", ["-c", `${script}\nsource "$GITHUB_ENV"\nnode "$CI_NODE_TEST" probe.test.cjs`], {
-        cwd: directory, env, encoding: "utf8",
-      });
-      assert.equal(result.status, 0, result.stdout + result.stderr);
-      assert.match(readFileSync(env.GITHUB_ENV, "utf8"), current ? /CI_NODE_TEST=scripts\/ci-profile\/node-test.mjs/ : /CI_NODE_TEST=--test/);
-    }
-  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("reruns use separate IDs and clocks and cannot mix job attempts", () => {
@@ -291,13 +268,7 @@ test("PR credential guard permits filenames but rejects secret expressions", () 
   assert.throws(() => assertNoPrWorkflowCredentials("${{ format('secrets.EXAMPLE', 'literal') }}"));
 });
 
-test("workflow exporter runs trusted code and keeps keys out of the PR jobs", () => {
-  const workflow = readFileSync(new URL("../../workflows/ci-profile.yml", import.meta.url), "utf8");
-  assert.match(workflow, /ref: \$\{\{ github.sha \}\}/);
-  assert.match(workflow, /startsWith\(github.event.workflow_run.display_title/);
-  assert.match(workflow, /environment: ci-profiling/);
-  assert.doesNotMatch(workflow, /head_sha|secrets: inherit|contents: write|pull-requests: write|pnpm install/);
-  const pr = readFileSync(new URL("../../workflows/pr-trusted.yml", import.meta.url), "utf8");
+test("credential expression scanning handles escaped and oversized expressions", () => {
   assert.equal(secretReference("run: node --test scripts/docker-compose-secrets.test.mjs"), false);
   for (const lookup of ["${{ secrets.PR_TOKEN }}", "${{ secrets['PR_TOKEN'] }}", "${{\n secrets.PR_TOKEN\n }}", "${{ toJSON(secrets) }}", "${{ secrets.HONEYCOMB_API_KEY }}"]) {
     assert.equal(secretReference(lookup), true);
@@ -326,18 +297,6 @@ test("workflow exporter runs trusted code and keeps keys out of the PR jobs", ()
   });
   assert.equal(boundedScan.status, 0, boundedScan.error?.message);
   assert.deepEqual(JSON.parse(boundedScan.stdout), [[false, false], [true, true], [true, true], [false, false], [true, true], [true, true]]);
-  assert.equal(secretReference(pr), false);
-  assertNoPrWorkflowCredentials(pr);
-  assert.match(pr, /if: always\(\) && env.PAPERCLIP_CI_PROFILE == 'true'/);
-  assert.doesNotMatch(pr, /PAPERCLIP_CI_PROFILE:.*labels/);
-  assert.equal(pr.match(/PAPERCLIP_CI_PROFILE: \$\{\{ needs.gate.outputs.profile_ci \}\}/g).length, 11);
-  // upload-artifact excludes files inside dot-directories by default. Keep
-  // this opt-in scoped to timing NDJSON, never the workspace or other secrets.
-  assert.equal(pr.match(/path: \.ci-profile\/\*\.ndjson\n {10}include-hidden-files: true/g).length, 11);
-  const routing = readFileSync(new URL("../../workflows/ci-routing.yml", import.meta.url), "utf8");
-  assert.match(routing, /PROFILE_CI: \$\{\{ steps.profile.outputs.profile_ci \}\}/);
-  assert.match(routing, /\/git\/ref\/heads\/master/);
-  assert.match(routing, /authorize\.mjs\?ref=\$TRUSTED_PROFILE_SHA/);
 });
 
 test("artifact parsing never extracts paths or executes files and rejects oversized records", () => {

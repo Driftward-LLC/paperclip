@@ -56,23 +56,24 @@ esac
     def test_missing_ui_fails_and_cleans_up(self):
         self.assertNotEqual(self.run_smoke(ui='missing').returncode, 0)
 
-    def test_removed_upstream_workflows_stay_absent_and_fork_workflows_remain(self):
+    def test_only_driftward_workflow_definitions_remain(self):
         workflows = ROOT / '.github/workflows'
-        for name in ['release.yml', 'refresh-lockfile.yml', 'cloud-migrator-artifacts.yml',
-                     'docker.yml', 'cloud-readiness.yml']:
-            self.assertFalse((workflows / name).exists(), name)
-        for name in ['fork-ci.yml', 'fork-release.yml']:
-            self.assertTrue((workflows / name).is_file(), name)
+        self.assertEqual({file.name for file in workflows.iterdir()}, {'fork-ci.yml', 'fork-release.yml'})
+        for file in workflows.iterdir():
+            self.assertNotRegex(file.read_text(), r'(?<![@\w-])paperclipai/paperclip(?![\w-])')
 
-    def test_inherited_jobs_are_upstream_only(self):
-        for file in (ROOT / '.github/workflows').glob('*.yml'):
-            if file.name.startswith('fork-'):
-                continue
+    def test_reusable_workflows_stay_inside_the_fork(self):
+        workflows = ROOT / '.github/workflows'
+        for file in workflows.iterdir():
             workflow = yaml.safe_load(file.read_text())
             for name, job in workflow['jobs'].items():
-                condition = job['if'].strip().removeprefix('${{').strip()
-                self.assertTrue(condition.startswith("github.repository == 'paperclipai/paperclip'"), f'{file.name}: {name}')
+                if 'uses' in job:
+                    self.assertTrue(job['uses'].startswith('./.github/workflows/'), f'{file.name}: {name}')
+                    self.assertTrue((ROOT / job['uses']).is_file(), f'{file.name}: {name}')
 
-    def test_profile_condition_preserves_hash_in_title(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/ci-profile.yml').read_text())
-        self.assertTrue(workflow['jobs']['export']['if'].endswith("'CI profile · PR #')) }}"))
+    def test_ci_and_release_admission_remain_fork_owned(self):
+        workflows = ROOT / '.github/workflows'
+        for file, names in [('fork-ci.yml', ['prepare', 'validation']), ('fork-release.yml', ['source'])]:
+            workflow = yaml.safe_load((workflows / file).read_text())
+            for name in names:
+                self.assertIn("github.repository == 'Driftward-LLC/paperclip'", workflow['jobs'][name]['if'])
