@@ -45,7 +45,7 @@ class MatrixTest(unittest.TestCase):
     def test_aggregate_fails_for_every_non_success_and_missing_job(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/fork-ci.yml').read_text())
         aggregate = workflow['jobs']['validation']
-        self.assertEqual(aggregate['name'], 'Fork validation')
+        self.assertEqual(aggregate['name'], 'Validation')
         self.assertEqual(aggregate['needs'], ['prepare', 'tests'])
         self.assertIn('always()', aggregate['if'])
         source = aggregate['steps'][0]['run'].split("python3 - <<'PYTHON'\n")[1].rsplit('\nPYTHON', 1)[0]
@@ -65,7 +65,7 @@ class MatrixTest(unittest.TestCase):
         tests = workflow['jobs']['tests']
         self.assertEqual(tests['strategy']['max-parallel'], 6)
         self.assertFalse(tests['strategy']['fail-fast'])
-        self.assertEqual(workflow['name'], 'Fork CI')
+        self.assertEqual(workflow['name'], 'CI')
         self.assertEqual(tests['strategy']['matrix'], '${{ fromJSON(needs.prepare.outputs.matrix) }}')
         steps = tests['steps']
         restore = next(i for i, step in enumerate(steps) if step.get('name') == 'Restore same-revision workspace outputs')
@@ -99,6 +99,9 @@ class MatrixTest(unittest.TestCase):
     def test_fork_server_partition_retains_native_suites(self):
         args = ['node', 'scripts/run-vitest-stable.mjs', '--mode', 'general', '--group',
                 'general-server-without-chat', '--shard-index', '0', '--shard-count', '1', '--dry-run']
-        result = subprocess.run(args, cwd=ROOT, env=dict(os.environ, GITHUB_WORKFLOW='Fork CI'), capture_output=True, text=True, check=True)
-        plan = json.loads(result.stdout)
-        self.assertIn('server/src/services/native-runtime/native-codex-runner.integration.test.ts', plan['selectedGeneralServerSuites'])
+        for file in ['fork-ci.yml', 'fork-release.yml']:
+            workflow_name = yaml.safe_load((ROOT / '.github/workflows' / file).read_text())['name']
+            with self.subTest(workflow=workflow_name):
+                result = subprocess.run(args, cwd=ROOT, env=dict(os.environ, GITHUB_WORKFLOW=workflow_name), capture_output=True, text=True, check=True)
+                plan = json.loads(result.stdout)
+                self.assertIn('server/src/services/native-runtime/native-codex-runner.integration.test.ts', plan['selectedGeneralServerSuites'])

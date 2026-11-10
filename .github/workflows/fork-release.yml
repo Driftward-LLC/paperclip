@@ -1,4 +1,4 @@
-name: Fork Docker release
+name: Docker release
 on:
   push:
     tags: ['driftward-v*']
