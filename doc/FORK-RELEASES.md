@@ -12,7 +12,7 @@ upstream synchronization.
 
 Enable Actions for the fork and allow the pinned actions used here. Keep default
 workflow token permissions read-only and disable workflow PR approvals. Protect
-`master`: require a PR and the `Fork validation` job from `Fork CI` (confirm its
+`master`: require a PR and the `Validation` job from `CI` (confirm its
 exact displayed context from the first PR run). Independently complete Astra review
 until Astra approves and required checks pass before merging; GitHub does not attest Astra
 identity. With one operator, do not require that operator to approve their own PR.
@@ -26,7 +26,7 @@ access to its GHCR package. Keep unrelated secrets out of the repository/environ
 Before the bootstrap PR, leave all inherited workflow IDs disabled, especially
 scheduled, release, cloud, agent-runtime, and privileged PR workflows. Enabling
 Actions globally on an old default branch can activate inherited schedules before
-this PR merges. Enable only Fork CI for bootstrap; workflows may register
+this PR merges. Enable only CI for bootstrap; workflows may register
 only after the first PR event. During this fork's bootstrap, 13 inherited IDs
 registered and were explicitly disabled; do not infer registration from source
 files alone. After merge confirm the only fork-executable definitions are
@@ -38,11 +38,11 @@ Start a `codex/` branch from current fork `master`. Install with Node 24.11+ and
 pnpm 9.15.4 using `pnpm install --frozen-lockfile`. Run `pnpm build`,
 `pnpm -r typecheck`, `pnpm test:run`, and
 `python3 -m unittest discover -s scripts/fork-ci -p 'test_*.py'`.
-Fork validation additionally runs all 17 inherited Node test files referencing
+Validation additionally runs all 17 inherited Node test files referencing
 retained workflow definitions and shared release scripts alongside fork guards.
 CI builds/typechecks once, then runs every row from the checked-in upstream
 unit matrix: currently 19 general and nine serialized partitions, with at most
-six test runners in parallel. The workflow retains the name `Fork CI`; upstream's
+six test runners in parallel. The workflow uses the name `CI`; upstream's
 `PR` special case would remove native suites from server partitions. Only generated
 package outputs and synthetic native test executables are shared by artifact ID
 within the same run and revision. Tests install locked dependencies separately;
@@ -55,7 +55,7 @@ checking is platform dependent: Node enforces `X_OK` on POSIX; on Windows it che
 existence instead. The permission-specific regression runs on POSIX, while all
 invalid-path regressions run on every platform. Without that setting,
 local Dot tests retain their locked Cargo freshness build. This reuses the prepared
-daemon without repeating a cold Rust build in the test partition. The final `Fork validation` aggregate
+daemon without repeating a cold Rust build in the test partition. The final `Validation` aggregate
 requires preparation and every test partition to succeed, including reusable
 release invocations; failure, cancellation, and skipped jobs cannot pass.
 Install PyYAML 6.0.2 for the workflow policy tests. Rustup must be available;
@@ -68,7 +68,7 @@ and no upstream-owned reusable workflows. Ordinary master pushes never publish.
 When synchronizing upstream, retain these fork workflows, keep the five removed
 definitions absent, and retain the upstream-only job guards. The workflow policy test
 fails when an inherited job lacks its repository guard. Review script changes as executable code;
-CI runs scripts from the checked revision. Fork CI intentionally runs the full
+CI runs scripts from the checked revision. CI intentionally runs the full
 unit suite rather than upstream paid/live-agent qualification campaigns.
 
 ## Explicit image release
@@ -79,7 +79,7 @@ integration. Tag creation triggers the release. Alternatively select that existi
 tag in Actions **Run workflow** and enter the identical tag as the input; selecting
 a branch is rejected. This is release intent, separate from production deployment.
 
-The workflow resolves the tag once, requires master ancestry, reruns full CI on
+The `Docker release` workflow resolves the tag once, requires master ancestry, reruns full CI on
 that SHA, builds once, checks health and HTML using a fresh anonymous data volume,
 and pushes that same smoke-tested image. The smoke creates no companies/agents
 and uses no provider credentials or host data. Only the publish job has package

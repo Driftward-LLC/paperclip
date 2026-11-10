@@ -1,4 +1,4 @@
-name: Fork CI
+name: CI
 on:
   pull_request:
   push:
@@ -135,7 +135,7 @@ jobs:
           subprocess.run(['node', 'scripts/run-vitest-stable.mjs', *json.loads(os.environ['TEST_ARGS'])], check=True)
           PYTHON
   validation:
-    name: Fork validation
+    name: Validation
     needs: [prepare, tests]
     if: ${{ always() && github.repository == 'Driftward-LLC/paperclip' }}
     runs-on: ubuntu-latest
