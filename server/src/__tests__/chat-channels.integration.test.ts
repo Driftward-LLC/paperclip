@@ -4640,9 +4640,10 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           trigger: "mention", message: makeMessage({ id: "41801", text: "Fix this", userId: "42", userName: "octocat", mentioned: true }) });
         const [job] = await db.select().from(fastResponseRequests).where(eq(fastResponseRequests.companyId, f.companyId));
         await vi.waitFor(async () => {
-          await vi.advanceTimersByTimeAsync(10);
+          const next = coordinator.nextWakeAt();
+          if (next !== null && next < job.expiresAt.getTime()) await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()));
           expect(coordinator.nextWakeAt()).toBe(job.expiresAt.getTime());
-        }, { timeout: 5000 });
+        }, { timeout: 5000, interval: 0 });
         expect(f.responseWrites).toEqual([]);
         if (outcome === "expiry") await vi.advanceTimersByTimeAsync(job.expiresAt.getTime() - Date.now());
         else {
@@ -4667,12 +4668,13 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         }
         let processedAt: number | undefined;
         await vi.waitFor(async () => {
-          await vi.advanceTimersByTimeAsync(10);
+          const next = coordinator.nextWakeAt();
+          if (next !== null && next < job.expiresAt.getTime()) await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()));
           const [action] = await db.select().from(chatActions).where(and(eq(chatActions.endpointId, f.endpoint.id), eq(chatActions.kind, "github_response_comment")));
           expect(action.status).toBe("processed");
-          processedAt ??= Date.now();
+          processedAt ??= action.updatedAt.getTime();
           expect(idleWorkSnapshot().active).toBe(0); expect(coordinator.nextWakeAt()).toBeNull();
-        }, { timeout: 10_000 });
+        }, { timeout: 10_000, interval: 0 });
         if (outcome !== "expiry" && outcome !== "streaming quarantine") expect(processedAt).toBeLessThan(job.expiresAt.getTime());
         expect(f.responseWrites).toHaveLength(["failure", "expiry"].includes(outcome) ? 1 : 0);
         const reads = vi.spyOn(db, "select"), writes = vi.spyOn(db, "transaction");
@@ -16706,10 +16708,17 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         const initial = await windows();
         expect(initial).toHaveLength(5);
         expect(new Set(initial.map(row => row.companyId)).size).toBe(2);
+        const scanAt = Math.min(...(await Promise.all([first.checkpoint(), second.checkpoint()]))
+          .map(row => Date.parse(String((row.value as Record<string, unknown>).nextScanAt))));
+        expect(scanAt).toBeGreaterThan(Date.now());
         await vi.waitFor(async () => {
-          await vi.advanceTimersByTimeAsync(1000);
-          expect(await windows()).toHaveLength(106);
-        }, { timeout: 10_000 });
+          const saved = await windows();
+          if (saved.length < 106) {
+            const next = coordinator.nextWakeAt();
+            if (next !== null && next < scanAt) await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()));
+          }
+          expect(saved).toHaveLength(106);
+        }, { timeout: 10_000, interval: 0 });
         expect(first.requests).toEqual([]); expect(second.requests).toEqual([]); expect(errors).toEqual([]);
       } finally { await coordinator.stop(); vi.useRealTimers(); }
     });
