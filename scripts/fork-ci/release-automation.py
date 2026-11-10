@@ -10,7 +10,6 @@ import urllib.request
 
 REPOSITORY = 'Driftward-LLC/paperclip'
 PREFIX = f'/repos/{REPOSITORY}'
-IMAGE = 'ghcr.io/driftward-llc/paperclip'
 TAG = re.compile(r'driftward-v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][a-zA-Z0-9.-]+)?')
 SHA = re.compile(r'[a-f0-9]{40}')
 
@@ -159,23 +158,17 @@ def start_release(event, request=api, now=None):
     return 'Started release ' + tag + ' for ' + sha
 
 
-def publish_release(sha, version, digest, run_id, request=api):
+def verify_metadata(sha, version, digest, request=api):
     validate_sha(sha)
     tag = 'driftward-' + version
-    if not TAG.fullmatch(tag) or not re.fullmatch(r'sha256:[a-f0-9]{64}', digest) or not re.fullmatch(r'[1-9][0-9]*', run_id):
+    if not TAG.fullmatch(tag) or not re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
         raise ValueError('Invalid published image identity')
     if tag_source(tag, request) != sha:
         raise ValueError('Published release source does not match its immutable tag')
-    body = (f'Image: `{IMAGE}@{digest}`\n\nSource: `{sha}`\n\n'
-            f'[Build and validation](https://github.com/{REPOSITORY}/actions/runs/{run_id})\n\nDeployment remains manual.')
     existing = request('GET', '/releases/tags/' + urllib.parse.quote(tag, safe=''), missing=True)
-    if existing is not None:
-        if existing.get('tag_name') != tag or existing.get('draft') is not False:
-            raise ValueError('Existing GitHub release does not match the published image receipt')
-        return 'Existing public GitHub release preserved for ' + tag
-    request('POST', '/releases', {'tag_name': tag, 'target_commitish': sha, 'name': tag,
-            'body': body, 'draft': False, 'prerelease': re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', version) is None, 'make_latest': 'legacy'})
-    return 'Published GitHub release ' + tag
+    if existing is not None and (existing.get('tag_name') != tag or existing.get('draft') is not False):
+        raise ValueError('Existing GitHub release does not match the published image receipt')
+    return re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', version) is None
 
 
 if __name__ == '__main__':
@@ -185,10 +178,13 @@ if __name__ == '__main__':
         if os.environ.get('GITHUB_EVENT_NAME') != 'workflow_run':
             raise ValueError('Expected a CI completion event')
         result = start_release(json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()))
-    elif sys.argv[1:] == ['publish']:
-        result = publish_release(os.environ['REVISION'], os.environ['VERSION'], os.environ['DIGEST'], os.environ['GITHUB_RUN_ID'])
+    elif sys.argv[1:] == ['verify-metadata']:
+        prerelease = verify_metadata(os.environ['REVISION'], os.environ['VERSION'], os.environ['DIGEST'])
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write('prerelease=' + str(prerelease).lower() + '\n')
+        result = 'Verified published image metadata'
     else:
-        raise ValueError('Expected start or publish')
+        raise ValueError('Expected start or verify-metadata')
     print(result)
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
         summary.write(result + '\n')

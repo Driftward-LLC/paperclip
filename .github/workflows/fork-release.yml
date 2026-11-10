@@ -139,10 +139,30 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Record the published image without deploying
+      - name: Verify the immutable source and existing release
+        id: metadata
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVISION: ${{ needs.source.outputs.sha }}
           VERSION: ${{ needs.source.outputs.version }}
           DIGEST: ${{ needs.publish.outputs.digest }}
-        run: python3 scripts/fork-ci/release-automation.py publish
+        run: python3 scripts/fork-ci/release-automation.py verify-metadata
+      - name: Record the published image without deploying
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd
+        with:
+          tag: driftward-${{ needs.source.outputs.version }}
+          commit: ${{ needs.source.outputs.sha }}
+          body: |
+            Image: `ghcr.io/driftward-llc/paperclip@${{ needs.publish.outputs.digest }}`
+
+            Source: `${{ needs.source.outputs.sha }}`
+
+            [Build and validation](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            Deployment remains manual.
+          prerelease: ${{ steps.metadata.outputs.prerelease }}
+          makeLatest: legacy
+          skipIfReleaseExists: true
+          allowUpdates: false
+          immutableCreate: false
+          replacesArtifacts: false
