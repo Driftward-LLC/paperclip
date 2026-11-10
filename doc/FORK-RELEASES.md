@@ -2,8 +2,11 @@
 
 This fork publishes only the self-hosted `production` target of the existing
 Dockerfile, for Linux amd64, to `ghcr.io/driftward-llc/paperclip`. It does not
-publish npm packages or deploy. Inherited upstream Actions jobs are guarded to run only in paperclipai/paperclip;
-their scripts remain available in source history and for upstream synchronization.
+publish npm packages or deploy. The inherited `release.yml`, `refresh-lockfile.yml`,
+`cloud-migrator-artifacts.yml`, `docker.yml`, and `cloud-readiness.yml` definitions
+are removed. Remaining inherited Actions jobs are guarded to run only in
+`paperclipai/paperclip`; shared release scripts and their tests remain for
+upstream synchronization.
 
 ## GitHub setup
 
@@ -36,7 +39,7 @@ pnpm 9.15.4 using `pnpm install --frozen-lockfile`. Run `pnpm build`,
 `pnpm -r typecheck`, `pnpm test:run`, and
 `python3 -m unittest discover -s scripts/fork-ci -p 'test_*.py'`.
 Fork validation additionally runs all 17 inherited Node test files referencing
-workflow definitions, preserving their upstream assertions alongside fork guards.
+retained workflow definitions and shared release scripts alongside fork guards.
 CI builds/typechecks once, then runs every row from the checked-in upstream
 unit matrix: currently 19 general and nine serialized partitions, with at most
 six test runners in parallel. The workflow retains the name `Fork CI`; upstream's
@@ -62,7 +65,8 @@ validation evidence. After required CI and review pass, merge through the protec
 branch. PR jobs use hosted runners, read-only tokens, no deployment credentials,
 and no upstream-owned reusable workflows. Ordinary master pushes never publish.
 
-When synchronizing upstream, retain these fork workflows and retain the upstream-only job guards. The workflow policy test
+When synchronizing upstream, retain these fork workflows, keep the five removed
+definitions absent, and retain the upstream-only job guards. The workflow policy test
 fails when an inherited job lacks its repository guard. Review script changes as executable code;
 CI runs scripts from the checked revision. Fork CI intentionally runs the full
 unit suite rather than upstream paid/live-agent qualification campaigns.

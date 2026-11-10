@@ -148,38 +148,6 @@ test("invalid DB package metadata prevents publication of either package", async
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("preview workflow separates branch compilation from trusted publishing", () => {
-  const workflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-  const builder = workflow.split("  package_preview:")[1].split("  publish_preview:")[0];
-  const publisher = workflow.split("  publish_preview:")[1].split("  image_preview:")[0];
-  const image = workflow.split("  image_preview:")[1].split("  publish_image_preview:")[0];
-  const imagePublisher = workflow.split("  publish_image_preview:")[1].split("  result_preview:")[0];
-  assert.doesNotMatch(builder, /id-token: write|packages: write|secrets\./);
-  assert.doesNotMatch(publisher, /ref: \$\{\{ inputs.source_ref|working-directory: source|pnpm install/);
-  assert.match(publisher, /environment: npm-canary/);
-  assert.match(image, /PAPERCLIP_BUILD_COMMIT=\$\{\{ inputs.source_ref \}\}/);
-  assert.doesNotMatch(image, /cache-(?:to|from):|canary-cloud|latest-cloud|packages: write|secrets\./);
-  assert.doesNotMatch(imagePublisher, /ref: \$\{\{ inputs.source_ref|docker\/build-push-action|pnpm install/);
-  assert.match(imagePublisher, /publish-image/);
-  assert.match(imagePublisher, /environment: npm-canary/);
-  assert.match(imagePublisher, /github.ref == 'refs\/heads\/master'/);
-  assert.match(publisher, /github.ref == 'refs\/heads\/master'/);
-  assert.doesNotMatch(workflow.split("  verify_canary:")[0], /uses: [^\n]+@v\d/);
-  assert.match(workflow, /Stack deploy \{0\} build/);
-});
-
-test("manual migrator and branch preview retain their npm publisher and concurrency", () => {
-  const release = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-  assert.match(release, /\(inputs.channel == 'preview' \|\| inputs.channel == 'cloud-migrator'\) && format\('\{0\}-\{1\}', inputs.channel, inputs.source_ref\)/);
-  const publisher = release.split("  publish_preview:")[1].split("  image_preview:")[0];
-  assert.match(publisher, /group: preview-package-publish-\$\{\{ inputs.source_ref \}\}/);
-  assert.match(publisher, /cancel-in-progress: false/);
-  assert.match(release, /PLAN_COMMAND: \$\{\{ inputs.channel == 'cloud-migrator' && 'plan-migrator' \|\| 'plan' \}\}/);
-  const result = release.split("  result_preview:")[1].split("  verify_canary:")[0];
-  assert.match(result, /always\(\) && inputs.channel == 'preview'/);
-});
-
-
 test("existing image reuse verifies the full revision behind the immutable tag", async () => {
   const digest = "sha256:" + "b".repeat(64);
   for (const revision of [sha, "c".repeat(40)]) {

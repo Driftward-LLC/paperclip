@@ -17,26 +17,10 @@ import { describe, expect, it } from "vitest";
  * Drift guard for the explicit preview image's bundled Sentry server package
  * (Dockerfile `cloud` target).
  *
- * The self-hosted image, built from the `production` target, keeps
- * `@sentry/node` as a true optional peer dependency: the operator installs
- * it themselves. The explicit preview image installs the packages the
- * `CLOUD_BUNDLED_SERVER_DEPS` build argument names, so a managed tenant
- * gets server error reports with no separate install step. The stage
- * reads each package's version from the `peerDependencies` block of
- * `server/package.json` at build time, so the version has one committed
- * home. This test pins the invariants that nothing else ties together:
- * every Dockerfile instruction that installs `@sentry/node` sits strictly
- * after the `production` stage body ends; the Dockerfile and the docker
- * workflow carry no literal version pin (they read the version from
- * `server/package.json` at build time instead); the `cloud-server-deps`
- * stage declares the `CLOUD_BUNDLED_SERVER_DEPS` build argument with a
- * default that names `@sentry/node`; and no committed manifest re-declares the
- * version.
  */
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const dockerfile = readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
-const workflow = readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8");
 const serverPackageJson = JSON.parse(
   readFileSync(path.join(repoRoot, "server", "package.json"), "utf8"),
 ) as { peerDependencies?: Record<string, string> };
@@ -134,17 +118,12 @@ describe("cloud image Sentry install", () => {
     // variable interpolation such as "@sentry/node@${version}".
     const versionPinPattern = /@sentry\/node@(\d[^\s"'`]*)/g;
 
-    for (const source of [
-      { label: "Dockerfile", text: dockerfile },
-      { label: "docker workflow", text: workflow },
-    ]) {
-      for (const match of source.text.matchAll(versionPinPattern)) {
-        expect(
-          match[1],
-          `${source.label} pins @sentry/node@${match[1]}, which must equal the declared ` +
-            `optional peer version ${declaredVersion}`,
-        ).toBe(declaredVersion);
-      }
+    for (const match of dockerfile.matchAll(versionPinPattern)) {
+      expect(
+        match[1],
+        `Dockerfile pins @sentry/node@${match[1]}, which must equal the declared ` +
+          `optional peer version ${declaredVersion}`,
+      ).toBe(declaredVersion);
     }
   });
 

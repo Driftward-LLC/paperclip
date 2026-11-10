@@ -56,6 +56,14 @@ esac
     def test_missing_ui_fails_and_cleans_up(self):
         self.assertNotEqual(self.run_smoke(ui='missing').returncode, 0)
 
+    def test_removed_upstream_workflows_stay_absent_and_fork_workflows_remain(self):
+        workflows = ROOT / '.github/workflows'
+        for name in ['release.yml', 'refresh-lockfile.yml', 'cloud-migrator-artifacts.yml',
+                     'docker.yml', 'cloud-readiness.yml']:
+            self.assertFalse((workflows / name).exists(), name)
+        for name in ['fork-ci.yml', 'fork-release.yml']:
+            self.assertTrue((workflows / name).is_file(), name)
+
     def test_inherited_jobs_are_upstream_only(self):
         for file in (ROOT / '.github/workflows').glob('*.yml'):
             if file.name.startswith('fork-'):

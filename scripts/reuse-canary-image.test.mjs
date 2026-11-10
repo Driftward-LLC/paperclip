@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { reuseCanaryImage } from "./reuse-canary-image.mjs";
 
@@ -58,18 +57,4 @@ test("invalid source refs and digests cannot reach external commands", async () 
     resolve: async () => "mutable:tag",
     run: () => assert.fail("Invalid digest accepted"),
   }));
-});
-
-test("canary reuse gates both native builds and still runs convergent promotion", () => {
-  const workflow = readFileSync(new URL("../.github/workflows/docker.yml", import.meta.url), "utf8");
-  const reuse = workflow.split("  reuse_canary_image:\n")[1].split("  build-and-push:\n")[0];
-  assert.match(reuse, /github.repository_id == '1170821064'.*startsWith\(github.ref, 'refs\/tags\/canary\/v'\)/);
-  assert.match(reuse, /node scripts\/reuse-canary-image.mjs/);
-  const build = workflow.split("  build-and-push:\n")[1].split("  merge-and-push:\n")[0];
-  assert.match(build, /needs: \[reuse_canary_image\]/);
-  assert.match(build, /!cancelled\(\).*result == 'skipped'.*result == 'success'.*outputs.reused == 'false'/);
-  assert.match(build, /platform: linux\/amd64/);
-  assert.match(build, /platform: linux\/arm64/);
-  const promotion = workflow.split("  promote_canary_channel:\n")[1];
-  assert.match(promotion, /!cancelled\(\).*needs.merge-and-push.result == 'success'.*outputs.reused == 'true'/);
 });

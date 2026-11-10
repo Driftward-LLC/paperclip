@@ -134,11 +134,4 @@ test("AWS trust is master-only and publication policy cannot overwrite objects",
   const policy = read("upload-policy").Statement;
   assert.deepEqual(policy.map((s) => s.Action), ["s3:PutObject", "s3:ListBucket"]);
   assert.equal(policy[0].Condition.StringEquals["s3:if-none-match"], "*");
-  const workflow = readFileSync(new URL("../.github/workflows/cloud-migrator-artifacts.yml", import.meta.url), "utf8");
-  assert.ok(!workflow.includes("pull_request") && !workflow.includes("self-hosted") && !workflow.includes("runs-on/fleet="));
-  assert.equal((workflow.match(/id-token: write/g) ?? []).length, 1);
-  assert.equal((workflow.match(/attestations: write/g) ?? []).length, 1);
-  assert.ok(workflow.indexOf(" validate migrator-artifacts") < workflow.indexOf("uses: actions/attest@"));
-  assert.ok(workflow.indexOf("uses: actions/attest@") < workflow.indexOf(" publish migrator-artifacts"));
-  assert.ok(workflow.indexOf(" verify-install migrator-artifacts") < workflow.indexOf("actions/upload-artifact@"), "the real dependency smoke must pass before artifact upload");
 });

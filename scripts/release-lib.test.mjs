@@ -6,14 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const repoRoot = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
-const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-
-function workflowVerifyBudget() {
-  return {
-    verifyAttempts: Number(releaseWorkflow.match(/^  NPM_PUBLISH_VERIFY_ATTEMPTS: "(\d+)"$/m)?.[1]),
-    verifyDelaySeconds: Number(releaseWorkflow.match(/^  NPM_PUBLISH_VERIFY_DELAY_SECONDS: "(\d+)"$/m)?.[1]),
-  };
-}
+const verifyBudget = { verifyAttempts: 180, verifyDelaySeconds: 10 };
 
 function writeExecutable(path, body) {
   writeFileSync(path, body, { mode: 0o755 });
@@ -345,8 +338,8 @@ test("wait_for_npm_package_versions polls every package concurrently", () => {
   assert.match(result.output, /@paperclipai\/beta@1\.2\.3 is registry-visible/);
 });
 
-test("the workflow budget tolerates the observed 15-minute 20-second registry delay", () => {
-  const budget = workflowVerifyBudget();
+test("the registry polling budget tolerates the observed 15-minute 20-second registry delay", () => {
+  const budget = verifyBudget;
   assert.ok(budget.verifyDelaySeconds > 0);
   const delayedCheck = Math.ceil((15 * 60 + 20) / budget.verifyDelaySeconds) + 1;
   const result = runPublishHelper({
@@ -365,12 +358,12 @@ test("the workflow budget tolerates the observed 15-minute 20-second registry de
   );
 });
 
-test("the workflow budget does not delay an immediately visible publish", () => {
+test("the registry polling budget does not delay an immediately visible publish", () => {
   const result = runPublishHelper({
     pnpmMode: "success",
     npmVersionExists: true,
     waitForRegistry: true,
-    ...workflowVerifyBudget(),
+    ...verifyBudget,
   });
 
   assert.equal(result.status, 0, result.output);
@@ -378,8 +371,8 @@ test("the workflow budget does not delay an immediately visible publish", () => 
   assert.doesNotMatch(result.calls, /^sleep /m);
 });
 
-test("the workflow budget fails closed after the last registry check", () => {
-  const budget = workflowVerifyBudget();
+test("the registry polling budget fails closed after the last registry check", () => {
+  const budget = verifyBudget;
   assert.ok(budget.verifyAttempts > 0);
   const result = runPublishHelper({
     pnpmMode: "success",
@@ -393,16 +386,4 @@ test("the workflow budget fails closed after the last registry check", () => {
   assert.equal(result.calls.match(/^pnpm publish /gm)?.length, 1);
   assert.equal(result.calls.match(/^npm view /gm)?.length, budget.verifyAttempts);
   assert.equal(result.calls.match(/^sleep /gm)?.length, budget.verifyAttempts - 1);
-});
-
-test("every publish job budgets for build time and four delayed packages", () => {
-  const { verifyAttempts, verifyDelaySeconds } = workflowVerifyBudget();
-  const pollingSeconds = (verifyAttempts - 1) * verifyDelaySeconds;
-  const requiredSeconds = 30 * 60 + 4 * pollingSeconds;
-
-  for (const job of ["publish_canary", "publish_nightly", "publish_beta", "publish_stable"]) {
-    const body = releaseWorkflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z_]+:\n/)[0] ?? "";
-    const timeoutMinutes = Number(body.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
-    assert.ok(timeoutMinutes * 60 > requiredSeconds, `${job} must leave time beyond build and polling`);
-  }
 });

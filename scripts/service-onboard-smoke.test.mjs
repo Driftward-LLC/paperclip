@@ -13,7 +13,6 @@ const repoRoot = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const scriptPath = join(repoRoot, "scripts", "service-onboard-smoke.sh");
 const script = readFileSync(scriptPath, "utf8");
 const smokeWorkflow = readFileSync(join(repoRoot, ".github", "workflows", "release-smoke.yml"), "utf8");
-const releaseWorkflow = readFileSync(join(repoRoot, ".github", "workflows", "release.yml"), "utf8");
 
 test("smoke script is executable and parses", () => {
   accessSync(scriptPath, constants.X_OK);
@@ -44,9 +43,4 @@ test("release-smoke workflow runs the service leg against the input version", ()
   // artifact name cannot collide with the Docker job's upload.
   assert.match(serviceJob, /SMOKE_CLEANUP: "false"/);
   assert.match(serviceJob, /\$\{\{ inputs\.artifact_name \}\}-service/);
-});
-
-test("nightly and beta smokes still route through the reusable workflow", () => {
-  const calls = releaseWorkflow.match(/uses: \.\/\.github\/workflows\/release-smoke\.yml/g) ?? [];
-  assert.ok(calls.length >= 2, "smoke_nightly and smoke_beta must call release-smoke.yml so smoke_service gates them");
 });
