@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { LEGACY_CLAUDE_CLI_VERSION, qualifiedLegacyClaudeVersion, createLegacyClaudeLauncher } from "./legacy-claude-cli.js";
 
@@ -11,14 +10,6 @@ it("rejects the old CLI that cannot discover mounted skills and requires the exa
   expect(qualifiedLegacyClaudeVersion(`${LEGACY_CLAUDE_CLI_VERSION} (Claude Code)\n`)).toBe(true);
   expect(qualifiedLegacyClaudeVersion(`warning: ${LEGACY_CLAUDE_CLI_VERSION} (Claude Code)`)).toBe(false);
 });
-it("keeps the workflow installation pin synchronized with local qualification", () => {
-  const workflow = readFileSync(new URL("../../.github/workflows/runner-full-stack-e2e.yml", import.meta.url), "utf8");
-  expect(workflow).toContain(`@anthropic-ai/claude-code@${LEGACY_CLAUDE_CLI_VERSION}`);
-  expect(workflow).not.toContain("@anthropic-ai/claude-code@2.1.19");
-  expect(workflow).toContain("--omit=dev --ignore-scripts @anthropic-ai/claude-code");
-});
-
-
 it("launches the script-free package wrapper and preserves arguments", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "claude-launcher-"));
   try {

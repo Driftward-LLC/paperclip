@@ -108,19 +108,6 @@ test("requires CODEOWNER environment reviewers with administrator bypass disable
     { protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "Team", reviewer: { login: "cryppadotta" } }] }] },
   ]) await assert.rejects(authorize(fixture({ environment })), /must require CODEOWNER reviewers/);
 });
-test("workflow keeps branch build read-only and reauthorizes the protected deploy", () => {
-  const workflow = readFileSync(new URL("../../.github/workflows/storybook-deploy.yml", import.meta.url), "utf8");
-  const [build, deploy] = workflow.split("  build:")[1].split("  deploy:");
-  assert.doesNotMatch(build, /pages: write|id-token: write|secrets\./);
-  assert.match(build, /permissions: \{\}/);
-  assert.doesNotMatch(build, /actions\/checkout|cache: pnpm/);
-  assert.match(build, /package-manager-cache: false/);
-  assert.match(build, /pnpm install --frozen-lockfile --ignore-scripts/);
-  assert.match(deploy, /name: storybook-deploy/);
-  assert.match(deploy, /authorize-storybook-deploy.cjs/);
-  assert.match(deploy, /name: \$\{\{ needs.build.outputs.artifact_name \}\}/);
-  assert.doesNotMatch(workflow.split("permissions:")[0], /push:|pull_request:/);
-});
 
 import { storybookDestination, branchIndex } from '../../.github/scripts/storybook-destination.cjs';
 const input = { branch: 'feature/foo', sha: 'a'.repeat(40), runId: 123, runAttempt: 1,

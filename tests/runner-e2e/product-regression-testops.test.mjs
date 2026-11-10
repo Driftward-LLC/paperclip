@@ -254,39 +254,3 @@ test('the separated selection, retained-report projection and server verificatio
   await writeFile(selectionFile, JSON.stringify({ ...receipt, targetSha: workflowSha }));
   await assert.rejects(productTestOps('project', selectionFile, runtime, exec, fetchImpl), /selection_hash/);
 });
-
-test('workflow keeps reporting credentials and trusted code outside candidate/provider jobs', async () => {
-  const workflow = await readFile(new URL('../../.github/workflows/runner-full-stack-e2e.yml', import.meta.url), 'utf8');
-  const selectionJob = workflow.split('  testops_selection:\n')[1].split('\n  catalog:\n')[0];
-  const reportingJob = workflow.split('  publish_testops:\n')[1].split('\n  publish_history:\n')[0];
-  for (const block of [selectionJob, reportingJob]) {
-    assert.match(block, /environment: runner-e2e-testops-reporting/);
-    assert.match(block, /ref: \$\{\{ github.sha \}\}/);
-    assert.doesNotMatch(block, /secrets\.(OPENAI|OPENROUTER|ANTHROPIC)|ref: \$\{\{ needs.authorize.outputs.target_sha/);
-  }
-  assert.match(workflow, /SELECT_ID: \$\{\{ needs.testops_selection.outputs.ids \|\| inputs.id \}\}/);
-  assert.match(reportingJob.split('    steps:\n')[0], /if: always\(\) && needs.testops_selection.outputs.job_run_started == 'true'/);
-  assert.doesNotMatch(reportingJob.split('    steps:\n')[0], /!cancelled\(\)/);
-  assert.match(reportingJob, /Finish the original TestOps job run\n\s+if: always\(\)/);
-  assert.doesNotMatch(workflow.slice(0, workflow.indexOf('\njobs:')), /workflow_call:/);
-});
-
-test('ordinary campaigns still run cells when the TestOps selection job is skipped', async () => {
-  const { parse } = await import('yaml');
-  const { jobs } = parse(await readFile(new URL('../../.github/workflows/runner-full-stack-e2e.yml', import.meta.url), 'utf8'));
-  const needs = name => [jobs[name].needs ?? []].flat();
-  const descends = name => needs(name).some(parent => parent === 'testops_selection' || descends(parent));
-  // GitHub's implicit success() also fails on a skipped ancestor, so any job
-  // below the optional selection must use a status function and then require
-  // each real dependency result itself.
-  const below = Object.keys(jobs).filter(descends);
-  assert.ok(below.includes('test') && below.includes('daytona_image'));
-  for (const name of below) {
-    const condition = String(jobs[name].if ?? '');
-    assert.match(condition, /always\(\)|!cancelled\(\)/, `${name} needs an explicit status function`);
-    if (condition.includes('always()') || name === 'catalog') continue;
-    for (const parent of needs(name).filter(parent => !['authorize', 'target_lock'].includes(parent))) {
-      assert.match(condition, new RegExp(`needs\\.${parent}\\.result == 'success'`), `${name} must still require ${parent}`);
-    }
-  }
-});

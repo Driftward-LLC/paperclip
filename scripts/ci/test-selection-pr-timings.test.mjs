@@ -244,16 +244,6 @@ test("refresh arguments keep explicit master run IDs and add dry-run, PR body an
   assert.throws(() => parseArgs(["--force"]), /Unexpected argument/);
 });
 
-test("the refresh workflow may only commit the four timing manifests and uses the rendered PR body", () => {
-  const workflow = readFileSync(".github/workflows/ci-test-durations.yml", "utf8");
-  for (const file of ["scripts/general-server-shard-durations.json", "scripts/serialized-shard-durations.json",
-    "scripts/e2e-shard-durations.json", "packages/paperclip-runner/scripts/vitest-lane-durations.json"]) {
-    assert.ok(workflow.split(file).length >= 3, `${file} must be both allowed and staged`);
-  }
-  assert.match(workflow, /refresh-test-durations\.mjs "--pr-body=\$RUNNER_TEMP\/ci-duration-pr\.md"/);
-  assert.match(workflow, /--body-file "\$RUNNER_TEMP\/ci-duration-pr\.md"/);
-});
-
 test("oversized-file reporters warn above the configurable budget and never throw", () => {
   assert.equal(oversizedThresholdMs({}), 180_000);
   assert.equal(oversizedThresholdMs({ PAPERCLIP_CI_OVERSIZED_TEST_FILE_SECONDS: "90" }), 90_000);

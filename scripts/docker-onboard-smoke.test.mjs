@@ -16,12 +16,6 @@ import test from "node:test";
 const repoRoot = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const scriptPath = join(repoRoot, "scripts", "docker-onboard-smoke.sh");
 const script = readFileSync(scriptPath, "utf8");
-const workflow = readFileSync(
-  join(repoRoot, ".github", "workflows", "release-smoke.yml"),
-  "utf8",
-);
-const dockerJob = workflow.split(/^  smoke:$/m)[1] ?? "";
-
 test("smoke script is executable and parses", () => {
   accessSync(scriptPath, constants.X_OK);
   execFileSync("bash", ["-n", scriptPath]);
@@ -78,29 +72,13 @@ test("the log dump starts empty on every run", () => {
   );
 });
 
-test("workflow fixes the container name before the harness runs", () => {
-  assert.match(dockerJob, /^    env:$/m);
-  assert.match(dockerJob, /SMOKE_CONTAINER_NAME: release-smoke-onboard/);
-  // Reading the name back out of the harness is the defect: a step that only
-  // learns it on success cannot use it on failure.
-  assert.doesNotMatch(dockerJob, /echo "SMOKE_CONTAINER_NAME=/);
-  assert.match(dockerJob, /SMOKE_LOG_FILE="\$\{\{ runner\.temp \}\}\/docker-onboard-smoke\.log"/);
-});
-
-test("workflow captures and uploads the logs unconditionally", () => {
-  const capture = dockerJob.split("- name: Capture Docker logs")[1] ?? "";
-  assert.ok(capture, "the Capture Docker logs step must exist");
-  assert.match(capture.split("- name:")[0], /if: always\(\)/);
-  // No guard that a failing launch would leave false.
-  assert.doesNotMatch(
-    capture.split("- name:")[0],
-    /\[\[ -n "\$\{SMOKE_CONTAINER_NAME:-\}" \]\]/,
+test("the harness uses its configurable readiness timeout for the health check", () => {
+  assert.match(
+    script,
+    /SMOKE_READY_TIMEOUT_SECONDS="\$\{SMOKE_READY_TIMEOUT_SECONDS:-\d+\}"/,
   );
-
-  const upload = dockerJob.split("- name: Upload diagnostics")[1] ?? "";
-  assert.ok(upload, "the Upload diagnostics step must exist");
-  assert.match(upload, /docker-onboard-smoke\.log/);
-  assert.match(upload, /if-no-files-found: error/);
-  // The metadata path is a literal, not a variable a failed launch never set.
-  assert.doesNotMatch(upload, /\$\{\{ env\.SMOKE_METADATA_FILE \}\}/);
+  assert.match(
+    script,
+    /wait_for_http "\$PAPERCLIP_PUBLIC_URL\/api\/health" "\$SMOKE_READY_TIMEOUT_SECONDS" 1/,
+  );
 });

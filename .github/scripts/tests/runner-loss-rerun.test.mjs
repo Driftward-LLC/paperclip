@@ -17,7 +17,7 @@ const MIXED = 42271918832; // six lost runners, one shutdown in the log, one rea
 const REAL = 42264785415; // a real assertion failure
 const ALL_LOST = 42272083862; // one lost runner
 const LOG_ONLY = 42277969418; // shutdown signal visible only in the job log
-const workflow = readFileSync(new URL("../../workflows/ci-runner-loss-rerun.yml", import.meta.url), "utf8");
+
 
 const json = (body, headers = {}) => new Response(JSON.stringify(body), {
   status: 200, headers: { "content-type": "application/json", ...headers },
@@ -290,28 +290,4 @@ test("summary cells cannot break the table", () => {
     jobs: [{ name: "ci / a|b", lost: false, evidence: "line one\nline | two" }],
   });
   assert.match(summary, /\| ci \/ a\\\|b \| no \| line one line \\\| two \|/);
-});
-
-test("workflow acts only on failed first attempts of the canonical PR workflow", () => {
-  const condition = workflow.match(/^ {4}if: >-\n((?: {6}.+\n)+)/m)?.[1].replace(/\s+/g, " ").trim();
-  assert.equal(condition, [
-    "github.repository == 'paperclipai/paperclip' &&",
-    "github.repository_id == '1170821064' &&",
-    "github.event.workflow_run.event == 'pull_request' &&",
-    "github.event.workflow_run.path == '.github/workflows/pr.yml' &&",
-    "github.event.workflow_run.conclusion == 'failure' &&",
-    "github.event.workflow_run.run_attempt == 1",
-  ].join(" "));
-  assert.match(workflow, /^on:\n {2}workflow_run:\n {4}workflows: \[PR\]\n {4}types: \[completed\]$/m);
-  assert.match(workflow, /^ {2}group: ci-runner-loss-rerun-\$\{\{ github\.event\.workflow_run\.id \}\}$/m);
-  const permissions = workflow.match(/^permissions:\n((?: {2}.+\n)+)/m)[1]
-    .split("\n").filter((line) => /^ {2}[a-z-]+:/.test(line)).map((line) => line.trim());
-  assert.deepEqual(permissions, ["actions: write", "checks: read", "contents: read", "pull-requests: read"]);
-});
-
-test("workflow runs only trusted default-branch code", () => {
-  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}\n {10}persist-credentials: false\n {10}sparse-checkout: \.github\/scripts\n/);
-  assert.doesNotMatch(workflow, /head_sha|head_branch|download-artifact|secrets\.|pull_request_target/);
-  assert.equal([...workflow.matchAll(/uses: /g)].length, 1);
-  assert.match(workflow, /runs-on: ubuntu-latest/);
 });

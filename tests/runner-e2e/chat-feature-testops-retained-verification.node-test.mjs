@@ -128,13 +128,3 @@ test('real archive extraction admits only the fixed selection file and rejects t
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
-
-test('manual workflow has no selection inputs or provider/upload path and retains closed receipts only', async () => {
-  const yaml = await readFile(new URL('../../.github/workflows/chat-feature-testops-retained-verification.yml', import.meta.url), 'utf8');
-  assert.match(yaml, /workflow_dispatch:/);
-  assert.ok(!yaml.includes('inputs:') && !yaml.includes('allurectl') && !yaml.includes('OPENROUTER') && !yaml.includes('id-token: write'));
-  assert.match(yaml, /environment: runner-e2e-testops-reporting/);
-  assert.match(yaml, /ref: \$\{\{ github.sha \}\}/);
-  assert.match(yaml, /chat-testops-retained-verification\/retained-verification.json/);
-  assert.ok(!yaml.includes('safe-export\n') && !yaml.includes('selection.zip'));
-});

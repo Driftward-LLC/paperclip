@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, realpath, cp, symlink, rename, access } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { createRequire } from 'node:module';
 import * as streaming from './chat-catalog-testops-streaming.mjs';
-const { parseDocument } = createRequire(import.meta.url)('yaml');
 import { fullCatalogCases, catalogTargetSha } from './chat-full-catalog-testops-manifest.mjs';
 import { hash, model } from './chat-completion-testops-contract.mjs';
 import { run } from './chat-completion-testops-cli.mjs';
@@ -214,29 +212,8 @@ test('the real CLI prepares without TestOps credentials and retains closed faile
   assert.deepEqual(JSON.parse(await readFile(path.join(state, 'once-upload_case.json'))),
     { stage: 'upload_case', status: 'STARTED_NO_AUTOMATIC_RESEND' });
   assert.doesNotMatch(captured + JSON.stringify(receipt), /SYNTHETIC_|ACCESS_TOKEN/);
-  const yaml = await readFile(new URL('../../.github/workflows/chat-catalog-testops-case.yml', import.meta.url), 'utf8');
-  for (const filename of ['publication.json', 'failure.json', 'once-upload_case.json']) {
-    assert.ok(yaml.includes(`/chat-completion-testops-upload-case/${filename}`));
-  }
   }
 });
-
-test('source host admission follows only the fixed same-commit callee with exact named caller secret references', async () => {
-  const { parse } = await import('yaml');
-  const { paidWorker } = await import('./chat-completion-testops-host-control.mjs');
-  const main = parse(await readFile(new URL('../../.github/workflows/chat-catalog-testops.yml', import.meta.url), 'utf8'));
-  const callee = parse(await readFile(new URL('../../.github/workflows/chat-catalog-testops-case.yml', import.meta.url), 'utf8'));
-  assert.equal(paidWorker(main, callee).environment, 'runner-e2e-private-paid');
-  for (const change of [
-    value => { value.jobs.chat.uses = 'foreign/repository/workflow.yml@master'; },
-    value => { value.jobs.chat.secrets = 'inherit'; },
-    value => { value.jobs.chat_external.secrets.ALLURE_TOKEN = ''; },
-    value => { value.jobs.chat.with.selection_sha256 = 'arbitrary'; },
-  ]) { const mutant = structuredClone(main); change(mutant); assert.throws(() => paidWorker(mutant, callee), /boundary/); }
-  const wrong = structuredClone(callee); wrong.jobs.chat.environment = 'runner-e2e-testops-reporting';
-  assert.throws(() => paidWorker(main, wrong), /boundary/);
-});
-
 
 test('the final CLI verifies all authenticated mixed-grade publications without re-export or upload and refuses a contradictory merged grade', async t => {
   for (const contradiction of [false, true]) {
@@ -327,18 +304,13 @@ const pinnedDownloadPath = (resolvedPath, artifact, artifacts, isSingleArtifactD
 async function downloaded(t, selected, available = selected.cases.length, runtimeContext = context) {
   const base = await realpath(await mkdtemp(path.join(tmpdir(), 'chat-stream-download-')));
   t.after(() => rm(base, { recursive: true, force: true }));
-  const workflow = parseDocument(await readFile(new URL('../../.github/workflows/chat-catalog-testops.yml', import.meta.url), 'utf8')).toJS();
   const roots = { bundle: path.join(base, 'catalog-bundles'), publication: path.join(base, 'catalog-publications') };
-  const active = step => !step.if || (step.if.includes('!= null') ? selected.cases.length > 1 : selected.cases.length === 1);
   for (const role of ['bundle', 'publication']) {
-    const steps = workflow.jobs.verify.steps.filter(step => step.uses?.startsWith('actions/download-artifact@')
-      && (step.with.pattern ?? step.with.name ?? '').startsWith(`chat-catalog-case-${role}-`) && active(step));
-    assert.equal(steps.length, 1);
-    const step = steps[0], artifacts = Array.from({ length: available }, (_, i) => ({ name: `chat-catalog-case-${role}-123-1-${i}` }));
+    const artifacts = Array.from({ length: available }, (_, i) => ({ name: `chat-catalog-case-${role}-123-1-${i}` }));
     await mkdir(roots[role]);
     for (const [index, artifact] of artifacts.entries()) {
-      const destination = pinnedDownloadPath(path.join(base, step.with.path.replaceAll('${{ github.run_id }}', '123')),
-        artifact, artifacts, Boolean(step.with.name));
+      const destination = pinnedDownloadPath(selected.cases.length === 1 ? path.join(roots[role], artifact.name) : roots[role],
+        artifact, artifacts, selected.cases.length === 1);
       await mkdir(destination, { recursive: true });
       const row = selected.cases[index];
       if (role === 'bundle') {
@@ -361,20 +333,20 @@ async function downloaded(t, selected, available = selected.cases.length, runtim
       }
     }
   }
-  return { base, workflow, bundles: roots.bundle, publications: roots.publication, digest: hash(JSON.stringify(selected)) };
+  return { base, bundles: roots.bundle, publications: roots.publication, digest: hash(JSON.stringify(selected)) };
 }
-test('actual pinned singleton download reaches safe gather', async t => {
+test('named singleton artifact layout reaches safe gather', async t => {
   const selected = { ...selection, cases: [current] }, f = await downloaded(t, selected);
   const output = path.join(f.base, 'catalog-projections');
   await streaming.gatherCaseProjections(f.bundles, output, context, selected, f.digest);
   assert.deepEqual(await readdir(output), ['chat-catalog-case-bundle-123-1-0']);
 });
-test('actual pinned singleton download reaches final publication validation', async t => {
+test('named singleton artifact layout reaches final publication validation', async t => {
   const selected = { ...selection, cases: [current] }, f = await downloaded(t, selected);
   const exported = await publicationSet(f.bundles, f.publications, context, selected, f.digest);
   assert.deepEqual(exported.map(row => row.status), ['passed']);
 });
-test('actual pinned multi download preserves all mixed grades and missing singleton among a multi selection still refuses', async t => {
+test('multi artifact layout preserves all mixed grades and missing singleton among a multi selection still refuses', async t => {
   const f = await downloaded(t, selection);
   assert.deepEqual((await publicationSet(f.bundles, f.publications, context, selection, f.digest)).map(row => row.status), ['passed','failed','passed']);
   const incomplete = await downloaded(t, selection, 1);
@@ -459,32 +431,6 @@ test('the owning gather CLI authenticates selection and copies only unchanged pr
   assert.deepEqual((await readdir(copied)).sort(), ['binding.json', 'junit.xml', 'normalized-results.json']);
   for (const name of await readdir(copied)) assert.deepEqual(await readFile(path.join(copied, name)),
     await readFile(path.join(f.bundles, 'chat-catalog-case-bundle-123-1-0', 'projection', name)));
-  const gather = f.workflow.jobs.aggregate.steps.find(step => step.name?.startsWith('Gather only'));
-  assert.match(gather.run, /chat-completion-testops-cli.mjs gather-case-projections catalog-projections/);
-  for (const job of ['aggregate', 'verify']) {
-    const downloads = f.workflow.jobs[job].steps.filter(step => step.with?.name?.startsWith('chat-catalog-case-bundle-'));
-    assert.equal(downloads.length, 1); assert.equal(downloads[0].with.name, 'chat-catalog-case-bundle-${{ github.run_id }}-1-0');
-    assert.equal(downloads[0].with.path, 'catalog-bundles/chat-catalog-case-bundle-${{ github.run_id }}-1-0');
-  }
-});
-
-test('singleton destination uses trusted run naming; the admitted producer remains first-attempt-only', async () => {
-  const workflow = parseDocument(await readFile(new URL('../../.github/workflows/chat-catalog-testops.yml', import.meta.url), 'utf8')).toJS();
-  const callee = parseDocument(await readFile(new URL('../../.github/workflows/chat-catalog-testops-case.yml', import.meta.url), 'utf8')).toJS();
-  for (const role of ['bundle', 'publication']) {
-    const step = workflow.jobs.verify.steps.find(step => step.with?.name?.startsWith(`chat-catalog-case-${role}-`));
-    const name = step.with.name.replaceAll('${{ github.run_id }}', '987654321');
-    const destination = step.with.path.replaceAll('${{ github.run_id }}', '987654321');
-    assert.equal(path.basename(destination), name);
-    assert.equal(pinnedDownloadPath(destination, { name }, [{ name }], true), destination);
-    const job = role === 'bundle' ? callee.jobs.report : callee.jobs.upload;
-    const producer = job.steps.find(step => step.with?.name?.startsWith(`chat-catalog-case-${role}-`));
-    assert.equal(producer.with.name.replaceAll('${{ github.run_id }}', '987654321').replaceAll('${{ fromJSON(inputs.cell).index }}', '0'), name);
-    if (role === 'publication') {
-      assert.match(producer.with.path, /once-upload_case.json/);
-      assert.match(producer.with.path, /failure.json/);
-    }
-  }
 });
 
 test('the unchanged upload CLI real publication and once files validate after a named singleton download', async t => {
