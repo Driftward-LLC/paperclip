@@ -382,6 +382,16 @@ describe("company decision service", () => {
       locked(row.pid); await lockGate;
     });
     const pid = await acquired;
+    const transaction = db.transaction.bind(db);
+    let admissionEntries = 0, releaseAdmissions!: () => void;
+    const admissionsReady = new Promise<void>(resolve => { releaseAdmissions = resolve; });
+    const admissionBarrier = vi.spyOn(db, "transaction").mockImplementation(async (callback, options) => {
+      if (options?.isolationLevel === "repeatable read" && ++admissionEntries <= 2) {
+        if (admissionEntries === 2) releaseAdmissions();
+        await admissionsReady;
+      }
+      return transaction(callback, options);
+    });
     f.provider.mockImplementation(async () => { await providerGate; return structuredClone(outcome); });
     const first = f.service.decide(f.context, DECISION_TEST_REQUEST), second = f.service.decide(f.context, DECISION_TEST_REQUEST);
     try {
@@ -395,7 +405,7 @@ describe("company decision service", () => {
       const holds = await db.select().from(budgetReservations).where(eq(budgetReservations.companyId, f.companyId));
       expect(holds).toHaveLength(2);
       expect(holds.every(row => row.state === "held" && row.amountCents === "1.0000000")).toBe(true);
-    } finally { unlock(); finishProviders(); await holding; await Promise.allSettled([first, second]); }
+    } finally { releaseAdmissions(); unlock(); finishProviders(); await holding; await Promise.allSettled([first, second]); admissionBarrier.mockRestore(); }
     expect((await first).status).toBe("succeeded"); expect((await second).status).toBe("succeeded");
     expect(await db.select().from(costEvents).where(eq(costEvents.companyId, f.companyId))).toHaveLength(2);
   });
