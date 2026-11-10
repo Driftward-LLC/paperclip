@@ -272,20 +272,44 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
   it("pages saved sessions and drains healthy work while one provider fails", async () => {
     const failed = await session();
     for (let index = 0; index < 104; index++) await session();
-    let broken = true;
+    let broken = true, firstRetryAt = Infinity;
     inspect.mockImplementation(async row => {
-      if (row.id === failed.id && broken) throw new Error("one provider unavailable");
+      if (row.id === failed.id && broken) {
+        firstRetryAt = Math.min(firstRetryAt, Date.now() + 30_000);
+        throw new Error("one provider unavailable");
+      }
       return { endedAt: true };
     });
     await start();
     await vi.waitFor(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
       const rows = await db.select().from(chatVoiceSessions).where(eq(chatVoiceSessions.companyId, companyId));
+      if (rows.filter(row => row.state === "ended").length < 104) {
+        const next = coordinator!.nextWakeAt();
+        if (next !== null && next < firstRetryAt) await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()));
+      }
       expect(rows.filter(row => row.state === "ended")).toHaveLength(104);
-    }, { timeout: 5000 });
+    }, { timeout: 5000, interval: 0 });
+    await vi.waitFor(async () => {
+      const [pending] = await db.select().from(chatVoiceSessions).where(eq(chatVoiceSessions.id, failed.id));
+      expect(pending).toMatchObject({ state: "active", errorCode: "cleanup_pending" });
+      const retryNotBefore = pending.updatedAt.getTime() + 30_000;
+      const next = coordinator!.nextWakeAt();
+      if (next !== null && next < retryNotBefore) {
+        await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()));
+      }
+      expect(idleWorkSnapshot().active).toBe(0);
+      expect(coordinator!.nextWakeAt()).toBeGreaterThanOrEqual(retryNotBefore);
+    }, { interval: 0 });
     expect(inspect.mock.calls.filter(([row]) => row.id === failed.id)).toHaveLength(1);
     expect(errors).toHaveLength(1);
-    broken = false; await settled(); errors.length = 0; await quiet();
+    const retryAt = coordinator!.nextWakeAt()!;
+    expect(retryAt).toBeGreaterThan(Date.now());
+    broken = false; await vi.advanceTimersByTimeAsync(retryAt - Date.now()); await settled();
+    expect(inspect.mock.calls.filter(([row]) => row.id === failed.id)).toHaveLength(2);
+    expect((await db.select().from(chatVoiceSessions).where(eq(chatVoiceSessions.companyId, companyId)))
+      .filter(row => row.state === "ended")).toHaveLength(105);
+    expect(errors).toHaveLength(1);
+    errors.length = 0; await quiet();
   });
   it("includes another company in the first batch despite a large older backlog", async () => {
     for (let index = 0; index < 30; index++) await session({ updatedAt: new Date(Date.now() - 120_000) });

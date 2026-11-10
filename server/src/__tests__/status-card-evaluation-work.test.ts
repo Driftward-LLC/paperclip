@@ -329,7 +329,9 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
     const service = statusCardEvaluationService(db, { wakeup });
     const originalRun = service.run;
     let running: Promise<unknown> | undefined;
+    let evaluationEnteredAt: number | undefined;
     const run = vi.spyOn(service, "run").mockImplementation(signal => {
+      evaluationEnteredAt = Date.now();
       const result = originalRun(signal); running = result; return result;
     });
     await start(service); await settled();
@@ -382,10 +384,9 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
     await coordinator!.stop(); coordinator = undefined;
     const dueAt = Date.now() + 500;
     const actualWakeup = wakeup.getMockImplementation()!;
-    let otherWakeEnteredAt: number | null = null;
+    let otherEvaluationEnteredAt: number | undefined;
     wakeup.mockImplementation((id, options) => {
-      // Capture dispatch ENTRY before the original mock performs any DB I/O.
-      if (id === other.agentId) otherWakeEnteredAt ??= Date.now();
+      if (id === other.agentId) otherEvaluationEnteredAt ??= evaluationEnteredAt;
       return actualWakeup(id, options);
     });
     await db.update(statusCards).set({ nextEvalAt: new Date(dueAt), nextEvalReason: "refresh" }).where(eq(statusCards.id, other.id));
@@ -398,10 +399,10 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
     // A null deadline can mean the due work is already running. Any still
     // armed deadline must preserve the known earlier obligation.
     if (armedBeforeAdvance !== null) expect(armedBeforeAdvance).toBeLessThanOrEqual(dueAt);
-    await vi.advanceTimersByTimeAsync(500); await flush();
+    await vi.advanceTimersByTimeAsync(Math.max(0, dueAt - Date.now())); await flush();
     await vi.waitFor(() => expect(wakeup).toHaveBeenCalledOnce());
-    expect(otherWakeEnteredAt).not.toBeNull();
-    expect(otherWakeEnteredAt!).toBeLessThan(dueAt + 500);
+    expect(otherEvaluationEnteredAt).toBeDefined();
+    expect(otherEvaluationEnteredAt!).toBeLessThan(dueAt + 500);
     expect(wakeup.mock.calls[0]![0]).not.toBe(originalAgent);
     const generated = (await statusCardService(db).getById(other.id))!;
     expect(generated.generatingIssueId).toBeTruthy();
