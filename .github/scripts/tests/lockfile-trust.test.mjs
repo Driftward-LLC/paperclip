@@ -266,17 +266,13 @@ test('pr command blocks a contributor lockfile change', () => {
   assert.match(result.output, /^writer=none$/m);
 });
 
-test('workflows run the trust policy from trusted code and pass the verified hash to the proof refresh', () => {
+test('the PR workflow runs the trust policy from trusted code', () => {
   const pr = readFileSync('.github/workflows/pr-trusted.yml', 'utf8');
   assert.match(pr, /git show "\$trusted_base:\.github\/scripts\/lockfile-trust\.mjs" > "\$policy"/);
   assert.match(pr, /BASE_SHA="\$trusted_base" node "\$policy" pr/);
   assert.match(pr, /PAPERCLIP_CI_PR_AUTHOR: \$\{\{ github\.event\.pull_request\.user\.login \}\}/);
   assert.doesNotMatch(pr, /github\.head_ref != 'chore\/refresh-lockfile'/);
 
-  const refresh = readFileSync('.github/workflows/refresh-lockfile.yml', 'utf8');
-  assert.match(refresh, /node \.github\/scripts\/lockfile-trust\.mjs merged/);
-  assert.match(refresh, /--refresh --trusted-lock-sha256 "\$TRUSTED_LOCK_SHA256"/);
-  assert.ok(refresh.indexOf('lockfile-trust.mjs merged') < refresh.indexOf('--trusted-lock-sha256'));
 });
 
 // Run the policy job's step script, as GitHub would, against a merge commit.

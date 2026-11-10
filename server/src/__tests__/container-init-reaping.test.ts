@@ -17,11 +17,6 @@ import { describe, expect, it } from "vitest";
  * of the entrypoint. This guard fails if a refactor drops the tini install or
  * unwraps the ENTRYPOINT back to a bare `docker-entrypoint.sh`.
  *
- * The behavioural half of this -- proving a real orphan is actually reaped
- * rather than merely configured to be -- lives in scripts/assert-orphan-reaping.sh.
- * It needs a container runtime, so it cannot run here: the Docker workflow runs
- * it against the pushed image, and scripts/docker-build-test.sh runs it against
- * a local build. This file guards the config those depend on.
  */
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -36,7 +31,6 @@ const ecsTaskDefinition = JSON.parse(read("docker", "ecs-task-definition.json"))
 };
 const reapingProbe = read("scripts", "assert-orphan-reaping.sh");
 const buildTest = read("scripts", "docker-build-test.sh");
-const dockerWorkflow = read(".github", "workflows", "docker.yml");
 
 /** Every `ENTRYPOINT [...]` line in a Dockerfile, in order. */
 function entrypoints(source: string): string[] {
@@ -126,13 +120,10 @@ describe("deployment manifest parity", () => {
 });
 
 describe("orphan-reaping probe", () => {
-  it.each([
-    ["the docker build test", buildTest],
-    ["the Docker publish workflow", dockerWorkflow],
-  ])("is exercised against a real image by %s", (_name, source) => {
+  it("is exercised against a real image by the docker build test", () => {
     // A probe nothing runs proves nothing. The static assertions above only
     // check configuration; this is what keeps the behavioural check wired up.
-    expect(source).toContain("scripts/assert-orphan-reaping.sh");
+    expect(buildTest).toContain("scripts/assert-orphan-reaping.sh");
   });
 
   it("fails closed when the orphan is never adopted by PID 1", () => {

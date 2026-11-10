@@ -20,8 +20,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const dockerfile = readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
-const workflow = readFileSync(path.join(repoRoot, ".github", "workflows", "docker.yml"), "utf8");
-const previewWorkflow = readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8");
+const workflow = readFileSync(path.join(repoRoot, ".github", "workflows", "fork-release.yml"), "utf8");
 
 /**
  * Return the text of the Dockerfile stage that starts at the named target.
@@ -68,11 +67,9 @@ describe("docker build-stamp wiring", () => {
     ).toBeLessThan(serverBuildIdx);
   });
 
-  it("passes PAPERCLIP_BUILD_COMMIT as a build-arg for standard and explicit preview builds", () => {
-    for (const [name, source] of [["standard", workflow], ["preview", previewWorkflow]]) {
-      expect(source, `${name} must pass the source commit into the image build`)
-        .toMatch(/^\s*PAPERCLIP_BUILD_COMMIT=\$\{\{ (?:github.sha|inputs.source_ref) \}\}$/m);
-    }
+  it("passes the checked source commit into the fork image build", () => {
+    expect(workflow).toContain('REVISION: ${{ needs.source.outputs.sha }}');
+    expect(workflow).toContain('--build-arg "PAPERCLIP_BUILD_COMMIT=$REVISION"');
   });
 });
 
@@ -122,16 +119,15 @@ describe("Standard image remote provider pack", () => {
     expect(production).toContain("gosu 65534:65534 node");
     expect(production).toContain("Object.values(manifest.payload.artifacts)");
     expect(production).toContain("PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH=/opt/paperclip-runner/provider-pack");
-    expect(workflow).toMatch(/^\s*target: production$/m);
+    expect(workflow).toContain("--target production");
     expect(dockerfile).not.toContain("provision-grok.mjs");
   });
 
-  it("lets explicit cloud preview builds inherit the same pack and configuration", () => {
+  it("lets the cloud target inherit the same pack and configuration", () => {
     const cloud = stageBody(dockerfile, "cloud");
     expect(cloud).toContain("FROM production AS cloud");
     expect(cloud).not.toContain("/opt/paperclip-runner/provider-pack");
     expect(cloud).not.toContain("PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH");
     expect(dockerfile.match(/build-provider-pack\.mjs \/provider-pack/g)).toHaveLength(1);
-    expect(previewWorkflow).toMatch(/^\s*target: cloud$/m);
   });
 });
