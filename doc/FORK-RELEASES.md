@@ -2,7 +2,8 @@
 
 This fork publishes only the self-hosted `production` target of the existing
 Dockerfile, for Linux amd64, to `ghcr.io/driftward-llc/paperclip`. It does not
-publish npm packages or deploy. Only `fork-ci.yml` (`CI`) and
+publish npm packages or deploy. Successful CI for the current `master` commit
+automatically starts an image release. Only `fork-ci.yml` (`CI`) and
 `fork-release.yml` (`Docker release`) remain in `.github/workflows`; inherited
 upstream workflow definitions are removed. Shared release scripts and their
 tests remain for upstream synchronization.
@@ -16,8 +17,8 @@ exact displayed context from the first PR run). Independently complete Astra rev
 until Astra approves and required checks pass before merging; GitHub does not attest Astra
 identity. With one operator, do not require that operator to approve their own PR.
 Review `.github/**`, `scripts/fork-ci/**`, and this runbook as privileged code. Configure a tag ruleset for `driftward-v*` preventing updates/deletion without
-bypass. Tag creation uses existing repository write permission; only operators
-should create release tags. Create environment
+bypass. The automatic release starter uses the built-in workflow token to create
+release tags; operators can still create them manually. Create environment
 `fork-release` with deployment branch policy allowing only `driftward-v*` tags;
 no extra approval click is required. Grant this repository's GITHUB_TOKEN write
 access to its GHCR package. Keep unrelated secrets out of the repository/environment.
@@ -57,7 +58,8 @@ the runner package pins its Rust toolchain. Build goes first to materialize work
 Open a PR using the repository template; have Astra review the exact revision and
 validation evidence. After required CI and review pass, merge through the protected
 branch. PR jobs use hosted runners, read-only tokens, no deployment credentials,
-and no upstream-owned reusable workflows. Ordinary master pushes never publish.
+and no upstream-owned reusable workflows. PR runs never publish; successful CI
+for the current master push starts the automatic release.
 
 When synchronizing upstream, retain these two fork workflows and keep upstream
 workflow definitions absent. Workflow policy rejects extra definitions, upstream
@@ -65,9 +67,33 @@ repository references, and missing local reusable workflows. Review script chang
 CI runs scripts from the checked revision. CI intentionally runs the full
 unit suite rather than upstream paid/live-agent qualification campaigns.
 
-## Explicit image release
+## Automatic and manual image releases
 
-After a reviewed merge, create a protected tag such as
+`Docker release` listens for completed `CI` runs. Its starter accepts only a
+successful push to this fork's `master`, verifies the CI run and its successful
+`Validation` job through GitHub, and checks that the tested SHA is still master.
+It checks out trusted default-branch code and consumes no PR artifacts or caches.
+A superseded master completion is skipped; this releases successful current heads,
+not every intermediate merge. GitHub concurrency keeps one running and one pending
+starter, so a newer completion can replace a pending one.
+
+The starter reserves a new immutable tag for that exact tested SHA, using UTC
+`driftward-vYYYY.MDD.patch` numbering, such as `driftward-v2026.1110.0`. It scans
+all tag pages and chooses the next patch for that day. Every existing tag counts,
+even when its image was not published. A retry reuses a unique existing release
+tag for the same SHA rather than reserving another version or moving a ref.
+Ambiguous tag writes are checked by reading the exact ref back.
+
+The starter explicitly dispatches `fork-release.yml` at the reserved tag, with
+the identical tag input. A tag created by `GITHUB_TOKEN` does not itself trigger
+a new Actions run. Only the starter receives `contents: write` and `actions:
+write`; reusable CI remains read-only. No additional token is needed. Existing
+queued, running, or successful release attempts suppress another dispatch.
+Failed or cancelled attempts require investigation and operator recovery.
+An API or dispatch failure leaves any reserved tag intact; rerun the starter to
+recover dispatch using that same tag. Do not delete or repoint the tag.
+
+For an explicit release after a reviewed merge, create a protected tag such as
 `driftward-v2026.1107.0` at the selected master commit using the authorized GitHub
 integration. Tag creation triggers the release. Alternatively select that existing
 tag in Actions **Run workflow** and enter the identical tag as the input; selecting
@@ -78,6 +104,12 @@ that SHA, builds once, checks health and HTML using a fresh anonymous data volum
 and pushes that same smoke-tested image. The smoke creates no companies/agents
 and uses no provider credentials or host data. Only the publish job has package
 write permission. The run summary records the source SHA and image digest.
+Only after that job succeeds, a separate job with `contents: write` creates the
+GitHub release, recording the digest, source SHA, and build link. An existing
+public release for the same immutable tag and SHA keeps its human-authored notes.
+A conflicting or draft release is left unchanged. If only metadata publication
+fails, rerun the failed job rather than rebuilding or republishing the image.
+Actual deployment remains a separate manual decision.
 
 Published tags are `v2026.1107.0` and `sha-<full-40-character-commit>`; no `latest`
 or mutable channel is written. The workflow serializes releases and uses authenticated GitHub Packages inventory

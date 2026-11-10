@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { BUNDLED_PLUGIN_CATALOG } from "../services/bundled-plugins.js";
@@ -70,7 +71,13 @@ describe("cloud image bundled plugins", () => {
     // image build always finishes — a newer push only supersedes the pending
     // slot instead of killing the build that is already publishing.
     expect(workflow).toMatch(/^concurrency:$/m);
-    expect(workflow).toContain("group: fork-docker-release");
+    const group = workflow.match(/^  group: \$\{\{ (.+) \}\}$/m)?.[1];
+    expect(group).toBeTruthy();
+    for (const event of ["push", "workflow_dispatch", "workflow_run"]) {
+      expect(runInNewContext(group!, { github: { event_name: event } })).toBe(
+        event === "workflow_run" ? "fork-automatic-release" : "fork-docker-release",
+      );
+    }
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).not.toContain("cancel-in-progress: true");
   });
