@@ -1245,8 +1245,6 @@ pub struct ClaudeManagedProvider {
     latest_usage_snapshot: Option<Value>,
     current_budget_cents: u64,
     reconnect_backoff: Duration,
-    config: ClaudeManagedProviderConfig,
-    system_instructions: String,
     managed_skills: Vec<ClaudeManagedSkillRef>,
 }
 
@@ -1496,8 +1494,6 @@ impl ClaudeManagedProvider {
             latest_usage_snapshot: None,
             current_budget_cents: spend_cap_cents(config.max_session_list_cost_usd)?,
             reconnect_backoff: Duration::from_millis(250),
-            config: config.clone(),
-            system_instructions,
             managed_skills,
         })
     }

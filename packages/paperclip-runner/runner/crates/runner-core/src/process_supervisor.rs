@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -15,6 +15,8 @@ use std::os::unix::process::CommandExt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::fd::AsRawFd;
 
+#[cfg(target_os = "macos")]
+use std::fs::{self, OpenOptions};
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
@@ -989,8 +991,10 @@ impl SupervisedProcess {
     ) -> Result<Self, LocalRunnerError> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let mut inherited = launch.inherited_command()?;
-            let mut result = Self::spawn_command(
+            let inherited = launch.inherited_command()?;
+            #[cfg(target_os = "macos")]
+            let mut inherited = inherited;
+            let result = Self::spawn_command(
                 &inherited.program,
                 &inherited.args,
                 shutdown_grace,
@@ -1001,6 +1005,8 @@ impl SupervisedProcess {
                     .then_some(inherited.program.as_path()),
                 None,
             );
+            #[cfg(target_os = "macos")]
+            let mut result = result;
             #[cfg(target_os = "macos")]
             if let Ok(process) = result.as_mut() {
                 process._temporary_executables =
@@ -1477,6 +1483,7 @@ fn exit_fact(status: ExitStatus) -> ProcessExitFact {
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Plays a provider whose tool runs `nohup job &` in a new session, the

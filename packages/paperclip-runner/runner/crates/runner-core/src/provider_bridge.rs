@@ -1073,37 +1073,6 @@ fn validate_pending_tool_call(
     bounded_json(&call.input, MAX_TOOL_VALUE_BYTES, "provider tool input")
 }
 
-fn validate_tool_result_contract(
-    authorized: &BTreeMap<String, AuthorizedTool>,
-    result: &ToolResult,
-) -> Result<(), ProviderBridgeError> {
-    let tool = authorized.get(&result.operation_id).ok_or_else(|| {
-        ProviderBridgeError::invalid("tool result operation is no longer authorized")
-    })?;
-    let validator = jsonschema::validator_for(&tool.response_schema).map_err(|_| {
-        ProviderBridgeError::invalid(format!(
-            "tool {} has an invalid durable response JSON Schema",
-            result.operation_id
-        ))
-    })?;
-    let response = semantic_response_value(result)?;
-    if !result.is_error {
-        // Paperclip semantic dispatchers return an authoritative envelope;
-        // provider contracts describe the operation-specific value inside
-        // `result`. Direct values remain valid for compatibility with v1
-        // peers that do not wrap their semantic result.
-        if let Some(response) = response {
-            if !validator.is_valid(response) {
-                return Err(ProviderBridgeError::invalid(format!(
-                    "tool result for {} failed JSON Schema validation",
-                    result.operation_id
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_authorized_tool_set(tool_set: &AuthorizedToolSet) -> Result<(), ProviderBridgeError> {
     if tool_set.schema != TOOL_SET_SCHEMA || tool_set.schema_version != 1 {
         return Err(ProviderBridgeError::invalid(
