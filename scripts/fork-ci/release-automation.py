@@ -137,14 +137,14 @@ def start_release(event, request=api, now=None):
                 raise
     if tag_source(tag, request) != sha:
         raise ValueError('Refusing to replace a release tag')
-    runs = pages(f'/actions/workflows/fork-release.yml/runs?head_sha={sha}', request, 'workflow_runs')
+    runs = pages(f'/actions/workflows/create-docker-release.yml/runs?head_sha={sha}', request, 'workflow_runs')
     attempts = [item for item in runs if item.get('display_title') == 'Docker release / ' + tag]
     for item in attempts:
         if (type(item.get('id')) is not int or item['id'] <= 0 or
             item.get('status') not in ['queued', 'requested', 'waiting', 'pending', 'in_progress', 'completed'] or
             item.get('head_sha') != sha or item.get('path') not in
-            ['.github/workflows/fork-release.yml', '.github/workflows/fork-release.yml@' + tag,
-             '.github/workflows/fork-release.yml@refs/tags/' + tag] or
+            ['.github/workflows/create-docker-release.yml', '.github/workflows/create-docker-release.yml@' + tag,
+             '.github/workflows/create-docker-release.yml@refs/tags/' + tag] or
             item.get('repository', {}).get('full_name') != REPOSITORY or
             item.get('event') not in ['push', 'workflow_dispatch']):
             raise ValueError('Release run identity mismatch')
@@ -154,7 +154,7 @@ def start_release(event, request=api, now=None):
         return 'Release already started for ' + tag
     if request('GET', '/git/ref/heads/master')['object']['sha'] != sha:
         return 'Skipped superseded master source; reserved tag ' + tag
-    request('POST', '/actions/workflows/fork-release.yml/dispatches', {'ref': tag, 'inputs': {'tag': tag}})
+    request('POST', '/actions/workflows/create-docker-release.yml/dispatches', {'ref': tag, 'inputs': {'tag': tag}})
     return 'Started release ' + tag + ' for ' + sha
 
 

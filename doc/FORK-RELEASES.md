@@ -4,7 +4,7 @@ This fork publishes only the self-hosted `production` target of the existing
 Dockerfile, for Linux amd64, to `ghcr.io/driftward-llc/paperclip`. It does not
 publish npm packages or deploy. Successful CI for the current `master` commit
 automatically starts an image release. Only `fork-ci.yml` (`CI`) and
-`fork-release.yml` (`Docker release`) remain in `.github/workflows`; inherited
+`create-docker-release.yml` (`Docker release`) remain in `.github/workflows`; inherited
 upstream workflow definitions are removed. Shared release scripts and their
 tests remain for upstream synchronization.
 
@@ -25,7 +25,9 @@ access to its GHCR package. Keep unrelated secrets out of the repository/environ
 
 Keep retired upstream workflow IDs disabled. GitHub can retain their historical
 registrations after their definitions are removed. Enable only `CI` and `Docker
-release`, and confirm their source files are `fork-ci.yml` and `fork-release.yml`.
+release`, and confirm their source files are `fork-ci.yml` and `create-docker-release.yml`.
+The renamed release workflow retains the `fork-release` environment and existing
+concurrency groups to preserve configured access and serialize old and new runs.
 
 ## Branch, review, and merge
 
@@ -84,7 +86,7 @@ even when its image was not published. A retry reuses a unique existing release
 tag for the same SHA rather than reserving another version or moving a ref.
 Ambiguous tag writes are checked by reading the exact ref back.
 
-The starter explicitly dispatches `fork-release.yml` at the reserved tag, with
+The starter explicitly dispatches `create-docker-release.yml` at the reserved tag, with
 the identical tag input. A tag created by `GITHUB_TOKEN` does not itself trigger
 a new Actions run. Only the starter receives `contents: write` and `actions:
 write`; reusable CI remains read-only. No additional token is needed. Existing
@@ -99,11 +101,13 @@ integration. Tag creation triggers the release. Alternatively select that existi
 tag in Actions **Run workflow** and enter the identical tag as the input; selecting
 a branch is rejected. This is release intent, separate from production deployment.
 
-The `Docker release` workflow resolves the tag once, requires master ancestry, reruns full CI on
-that SHA, builds once, checks health and HTML using a fresh anonymous data volume,
+The `Docker release` workflow resolves the tag once, requires master ancestry,
+checks metadata and GHCR write access, then reruns full CI on that SHA, builds once,
+checks health and HTML using a fresh anonymous data volume,
 and pushes that same smoke-tested image. The smoke creates no companies/agents
-and uses no provider credentials or host data. Only the publish job has package
-write permission. The run summary records the source SHA and image digest.
+and uses no provider credentials or host data. The source preflight and publish
+jobs use the same `fork-release` environment and `packages: write` permission;
+reusable CI stays read-only. The run summary records the source SHA and image digest.
 Only after that job succeeds, a separate job with `contents: write` verifies the
 immutable source and uses the pinned Marketplace **Create Release** action
 (`ncipollo/release-action`) to record the digest, source SHA, and build link.
@@ -129,7 +133,7 @@ GitHub's secret settings; never commit it, print it, or put it in workflow input
 The token must see the target package when it exists; an incomplete readable
 inventory is not proof that an inaccessible package is absent.
 
-Only the release preflight step receives this token. GHCR login and publication
+Only the metadata preflight steps receive this token. GHCR login and publication
 continue to use the built-in `GITHUB_TOKEN` with the existing package-write
 permission; the metadata token never publishes. PR CI receives neither release
 credential. GitHub's container-package REST endpoints can reject the built-in
@@ -138,7 +142,34 @@ it; the dedicated read token avoids relying on that endpoint compatibility.
 Missing/expired/denied metadata credentials and redirects fail closed, with
 bounded error messages. Do not infer absence from registry `403 DENIED`, public
 filters, or REST `404`. Stop and fix access rather than bypassing inventory.
-The first live publication is deliberately not exercised here.
+Before repeated CI starts, metadata inventory checks the read credential and
+refuses existing release tags. A separate write check uses that job's
+`GITHUB_TOKEN` and `GITHUB_ACTOR` to request a scoped GHCR registry token, start an
+empty blob upload for `driftward-llc/paperclip`, and immediately cancel that upload.
+No blob, manifest, image, or tag is published by this check. Registry tokens are
+opaque; successful login or token exchange alone does not prove write access,
+because the token server may grant fewer permissions than requested
+([Distribution authentication contract](https://distribution.github.io/distribution/spec/auth/token/)).
+The [Distribution upload contract](https://distribution.github.io/distribution/spec/api/#starting-an-upload)
+defines upload initiation and cancellation. The check requires HTTP 202 for
+initiation and HTTP 204 for cancellation, rejects redirects, and sends credentials
+only to fixed HTTPS GHCR endpoints or a returned upload URL inside this package.
+Denied access, malformed responses, network errors, or failed cancellation stop
+the release before expensive work. For package denial, grant this repository
+**Write** under the package's **Manage Actions access**; Docker login succeeding
+does not establish that permission.
+
+The publish job repeats the write check with its own fresh `GITHUB_TOKEN` before
+image preparation. Metadata inventory runs again before the build and immediately
+before the push. These checks catch changed credentials, permissions and tags;
+they cannot make publication atomic or guarantee that access remains unchanged.
+The upload check proves permission to begin a push at check time; it cannot
+guarantee later blob or manifest publication. Rerunning an older release tag uses
+that tag's original workflow; these gates apply only to revisions containing them.
+GHCR upload/cancellation compatibility and actual publication require an authorized
+workflow run; offline tests do not prove live registry access. An interrupted or
+uncancellable check may leave an empty upload session for registry expiry; it
+never completes the upload or alters a release tag.
 GHCR does not enforce
 immutable tags: restrict package write access and do not edit tags externally.
 A failed partial publication must be investigated; do not delete/overwrite tags to

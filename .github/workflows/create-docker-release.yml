@@ -46,6 +46,11 @@ jobs:
   source:
     if: github.repository == 'Driftward-LLC/paperclip' && (github.event_name == 'push' || startsWith(github.ref, 'refs/tags/driftward-v'))
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: fork-release
+    permissions:
+      contents: read
+      packages: write
     outputs:
       sha: ${{ steps.source.outputs.sha }}
       version: ${{ steps.source.outputs.version }}
@@ -66,6 +71,16 @@ jobs:
           git merge-base --is-ancestor "$sha" origin/master
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "version=${RELEASE_TAG#driftward-}" >> "$GITHUB_OUTPUT"
+      - name: Check immutable release tags before repeated CI
+        env:
+          GH_PACKAGES_READ_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN }}
+          VERSION: ${{ steps.source.outputs.version }}
+          REVISION: ${{ steps.source.outputs.sha }}
+        run: python3 scripts/fork-ci/release-preflight.py
+      - name: Check GHCR write access before repeated CI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/fork-ci/release-preflight.py --publish-access
   checks:
     needs: source
     uses: ./.github/workflows/fork-ci.yml
@@ -90,6 +105,10 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
+      - name: Check this publish job token before image preparation
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/fork-ci/release-preflight.py --publish-access
       - name: Free hosted runner disk for source image and loaded artifact
         run: |
           sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/local/lib/android /opt/ghc
@@ -116,6 +135,10 @@ jobs:
             --tag "$IMAGE:$VERSION" .
       - name: Smoke fresh image without agents or host data
         run: bash scripts/fork-ci/image-smoke.sh "$IMAGE:$VERSION"
+      - name: Recheck immutable tags immediately before publication
+        env:
+          GH_PACKAGES_READ_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN }}
+        run: python3 scripts/fork-ci/release-preflight.py
       - name: Publish checked and smoke-tested image
         id: image
         run: |

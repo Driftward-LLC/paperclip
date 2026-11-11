@@ -1,4 +1,5 @@
 import importlib.util
+import http.client
 import io
 import json
 import os
@@ -110,16 +111,147 @@ class MetadataCredentialTest(unittest.TestCase):
 class ReleaseCredentialIsolationTest(unittest.TestCase):
     def test_read_token_is_scoped_to_preflight_publish_uses_job_token(self):
         root = Path(__file__).resolve().parents[2]
-        workflow = yaml.safe_load((root / '.github/workflows/fork-release.yml').read_text())
+        workflow = yaml.safe_load((root / '.github/workflows/create-docker-release.yml').read_text())
         publish = workflow['jobs']['publish']
         metadata = [step for step in publish['steps'] if step.get('run') == 'python3 scripts/fork-ci/release-preflight.py']
-        self.assertEqual(len(metadata), 1)
-        self.assertEqual(metadata[0]['env'], {'GH_PACKAGES_READ_TOKEN': '${{ secrets.GH_PACKAGES_READ_TOKEN }}'})
+        self.assertEqual(len(metadata), 2)
+        for step in metadata:
+            self.assertEqual(step['env'], {'GH_PACKAGES_READ_TOKEN': '${{ secrets.GH_PACKAGES_READ_TOKEN }}'})
         for step in publish['steps']:
-            if step is not metadata[0]:
+            if step not in metadata:
                 self.assertNotIn('GH_PACKAGES_READ_TOKEN', str(step))
         self.assertNotIn('GH_PACKAGES_READ_TOKEN', str(publish.get('env', {})))
         login = next(step for step in publish['steps'] if step.get('uses', '').startswith('docker/login-action@'))
         self.assertEqual(login['with']['password'], '${{ secrets.GITHUB_TOKEN }}')
         self.assertEqual(publish['permissions'], {'contents': 'read', 'packages': 'write'})
         self.assertNotIn('GH_PACKAGES_READ_TOKEN', (root / '.github/workflows/fork-ci.yml').read_text())
+
+
+class PublishAccessTest(unittest.TestCase):
+    def response(self, status, payload=b'', headers=None):
+        response = io.BytesIO(payload)
+        response.status = status
+        response.headers = headers or {}
+        return response
+
+    def exchange(self, location='/v2/driftward-llc/paperclip/blobs/uploads/fixture?_state=opaque'):
+        return [self.response(200, b'{"token":"opaque-registry-secret"}'),
+                self.response(202, headers={'Location': location}), self.response(204)]
+
+    def test_publish_token_starts_empty_upload_and_cancels_without_publishing(self):
+        import base64
+        for location in ('/v2/driftward-llc/paperclip/blobs/uploads/fixture?_state=opaque',
+                         'https://ghcr.io/v2/driftward-llc/paperclip/blobs/uploads/fixture?_state=opaque'):
+            with self.subTest(location=location), patch.dict(os.environ, {'GITHUB_TOKEN': 'publish-secret', 'GITHUB_ACTOR': 'fixture-actor', 'GH_PACKAGES_READ_TOKEN': 'metadata-secret'}, clear=True), patch.object(preflight.opener, 'open', side_effect=self.exchange(location)) as opened:
+                preflight.assert_publish_access()
+                requests = [call.args[0] for call in opened.call_args_list]
+                self.assertEqual([request.get_method() for request in requests], ['GET', 'POST', 'DELETE'])
+                self.assertEqual(requests[0].full_url, 'https://ghcr.io/token?service=ghcr.io&scope=repository%3Adriftward-llc%2Fpaperclip%3Apull%2Cpush')
+                self.assertEqual(base64.b64decode(requests[0].get_header('Authorization').split()[1]), b'fixture-actor:publish-secret')
+                self.assertEqual(requests[1].full_url, 'https://ghcr.io/v2/driftward-llc/paperclip/blobs/uploads/')
+                self.assertEqual(requests[1].data, b'')
+                self.assertEqual(requests[2].full_url, 'https://ghcr.io/v2/driftward-llc/paperclip/blobs/uploads/fixture?_state=opaque')
+                for request in requests[1:]:
+                    self.assertEqual(request.get_header('Authorization'), 'Bearer opaque-registry-secret')
+                for call in opened.call_args_list:
+                    self.assertEqual(call.kwargs, {'timeout': 30})
+                    self.assertNotIn('metadata-secret', str(call))
+
+    def test_missing_publish_credentials_do_not_fall_back_to_metadata_token(self):
+        for missing in ('GITHUB_TOKEN', 'GITHUB_ACTOR'):
+            env = {'GITHUB_TOKEN': 'publish-secret', 'GITHUB_ACTOR': 'fixture-actor', 'GH_PACKAGES_READ_TOKEN': 'metadata-secret'}
+            env[missing] = ' '
+            with self.subTest(missing=missing), patch.dict(os.environ, env, clear=True), patch.object(preflight.opener, 'open') as opened:
+                with self.assertRaisesRegex(ValueError, missing):
+                    preflight.assert_publish_access()
+                opened.assert_not_called()
+
+    def test_successful_token_exchange_is_not_write_access_proof(self):
+        error = HTTPError('https://ghcr.io/fixture', 403, 'publish-secret', {}, io.BytesIO(b'opaque-registry-secret'))
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'publish-secret', 'GITHUB_ACTOR': 'fixture-actor'}, clear=True), patch.object(preflight.opener, 'open', side_effect=[self.exchange()[0], error]) as opened:
+            with self.assertRaisesRegex(RuntimeError, 'upload access.*HTTP 403') as raised:
+                preflight.assert_publish_access()
+            self.assertEqual(opened.call_count, 2)
+            self.assertNotIn('secret', str(raised.exception))
+
+    def test_every_request_fails_closed_on_http_transport_and_unexpected_status(self):
+        for phase in range(3):
+            for failure in (HTTPError('https://ghcr.io/private', 302, 'publish-secret', {}, io.BytesIO(b'opaque-registry-secret')),
+                            HTTPError('https://ghcr.io/private', 401, 'publish-secret', {}, None),
+                            HTTPError('https://ghcr.io/private', 403, 'publish-secret', {}, None),
+                            HTTPError('https://ghcr.io/private', 429, 'publish-secret', {}, None),
+                            HTTPError('https://ghcr.io/private', 500, 'publish-secret', {}, None),
+                            URLError('publish-secret'), TimeoutError('opaque-registry-secret'), self.response(201)):
+                responses = self.exchange()[:phase] + [failure]
+                with self.subTest(phase=phase, failure=type(failure).__name__), patch.dict(os.environ, {'GITHUB_TOKEN': 'publish-secret', 'GITHUB_ACTOR': 'fixture-actor'}, clear=True), patch.object(preflight.opener, 'open', side_effect=responses) as opened:
+                    with self.assertRaises(RuntimeError) as raised:
+                        preflight.assert_publish_access()
+                    self.assertNotIn('secret', str(raised.exception))
+                    self.assertEqual(opened.call_count, phase + 1)
+                    if phase == 2:
+                        self.assertIn('cleanup unconfirmed', str(raised.exception))
+
+    def test_token_response_read_failure_is_sanitized(self):
+        response = self.response(200)
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'publish-secret', 'GITHUB_ACTOR': 'fixture-actor'}, clear=True), patch.object(preflight.opener, 'open', return_value=response), patch.object(response, 'read', side_effect=http.client.IncompleteRead(b'opaque-registry-secret')):
+            with self.assertRaisesRegex(RuntimeError, 'network error') as raised:
+                preflight.assert_publish_access()
+            self.assertNotIn('secret', str(raised.exception))
+
+    def test_malformed_token_response_never_reaches_upload(self):
+        for payload in (b'not json publish-secret', b'[]', b'{}', b'{"token":null}', b'{"token":""}', b'{"token":"bad\\nheader"}', b'{"token":"x"}' + b' ' * 65536):
+            with self.subTest(payload=payload), patch.dict(os.environ, {'GITHUB_TOKEN': 'publish-secret', 'GITHUB_ACTOR': 'fixture-actor'}, clear=True), patch.object(preflight.opener, 'open', return_value=self.response(200, payload)) as opened:
+                with self.assertRaisesRegex(ValueError, 'token response') as raised:
+                    preflight.assert_publish_access()
+                self.assertNotIn('secret', str(raised.exception))
+                self.assertEqual(opened.call_count, 1)
+
+    def test_unsafe_or_missing_upload_location_never_receives_credentials(self):
+        for location in ('', 'https://elsewhere.invalid/v2/driftward-llc/paperclip/blobs/uploads/id',
+                         '//elsewhere.invalid/v2/driftward-llc/paperclip/blobs/uploads/id',
+                         'http://ghcr.io/v2/driftward-llc/paperclip/blobs/uploads/id',
+                         'https://actor@ghcr.io/v2/driftward-llc/paperclip/blobs/uploads/id',
+                         'https://[invalid/v2/driftward-llc/paperclip/blobs/uploads/id',
+                         '/v2/other/package/blobs/uploads/id', '/v2/driftward-llc/paperclip/blobs/sha256:id',
+                         '/v2/driftward-llc/paperclip/blobs/uploads/',
+                         '/v2/driftward-llc/paperclip/blobs/uploads/%2e%2e',
+                         '/v2/driftward-llc/paperclip/blobs/uploads/id%2f..',
+                         '/v2/driftward-llc/paperclip/blobs/uploads/id#fragment',
+                         '/v2/driftward-llc/paperclip/blobs/uploads/id\n'):
+            with self.subTest(location=location), patch.dict(os.environ, {'GITHUB_TOKEN': 'publish-secret', 'GITHUB_ACTOR': 'fixture-actor'}, clear=True), patch.object(preflight.opener, 'open', side_effect=self.exchange(location)) as opened:
+                with self.assertRaisesRegex(ValueError, 'upload location'):
+                    preflight.assert_publish_access()
+                self.assertEqual(opened.call_count, 2)
+
+
+class EarlyReleaseAccessTest(unittest.TestCase):
+    def test_access_and_inventory_precede_reusable_ci_and_publish_build(self):
+        root = Path(__file__).resolve().parents[2]
+        jobs = yaml.safe_load((root / '.github/workflows/create-docker-release.yml').read_text())['jobs']
+        self.assertEqual(jobs['checks']['needs'], 'source')
+        self.assertEqual(jobs['publish']['needs'], ['source', 'checks'])
+        for name in ('source', 'publish'):
+            job = jobs[name]
+            self.assertEqual(job['environment'], 'fork-release')
+            self.assertEqual(job['permissions'], {'contents': 'read', 'packages': 'write'})
+            steps = job['steps']
+            access = next(i for i, step in enumerate(steps) if step.get('run') == 'python3 scripts/fork-ci/release-preflight.py --publish-access')
+            inventory = next(i for i, step in enumerate(steps) if step.get('run') == 'python3 scripts/fork-ci/release-preflight.py')
+            self.assertEqual(steps[access]['env'], {'GITHUB_TOKEN': '${{ secrets.GITHUB_TOKEN }}'})
+            self.assertEqual(steps[inventory]['env']['GH_PACKAGES_READ_TOKEN'], '${{ secrets.GH_PACKAGES_READ_TOKEN }}')
+            if name == 'source':
+                resolve = next(i for i, step in enumerate(steps) if step.get('id') == 'source')
+                self.assertLess(resolve, inventory)
+                self.assertLess(inventory, access)
+                self.assertEqual(steps[inventory]['env']['VERSION'], '${{ steps.source.outputs.version }}')
+                self.assertEqual(steps[inventory]['env']['REVISION'], '${{ steps.source.outputs.sha }}')
+            else:
+                build = next(i for i, step in enumerate(steps) if step.get('run', '').startswith('docker buildx build'))
+                smoke = next(i for i, step in enumerate(steps) if step.get('run', '').startswith('bash scripts/fork-ci/image-smoke.sh'))
+                publish = next(i for i, step in enumerate(steps) if step.get('id') == 'image')
+                inventories = [i for i, step in enumerate(steps) if step.get('run') == 'python3 scripts/fork-ci/release-preflight.py']
+                self.assertEqual(len(inventories), 2)
+                self.assertLess(access, build)
+                self.assertLess(inventory, build)
+                self.assertLess(smoke, inventories[-1])
+                self.assertEqual(inventories[-1] + 1, publish)
