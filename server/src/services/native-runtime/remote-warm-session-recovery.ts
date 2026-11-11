@@ -31,10 +31,32 @@ function postTerminalEvents(control: Record<string, unknown>): unknown[] {
 /** A session is settled when its commands finished and nothing is live or waiting.
  * Events after the terminal describe the past, so refusing cannot undo them: they
  * are reported instead. Every event must still authenticate as this session's. */
+const RUNNER_LIFECYCLE_COMMAND_TYPES = new Set(["runner.suspend", "runner.drain", "runner.shutdown"]);
+
+function outcomeUnknown(command: Record<string, unknown>): boolean {
+  return command.status === "indeterminate" ||
+    (command.status === "failed" && (record(command.result).code === "execution_indeterminate" ||
+      record(record(command.result).result).code === "execution_indeterminate"));
+}
+
+export function unsettledControllerCommands(commands: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  const lastCompletedTurnStart = Math.max(-1, ...commands
+    .filter(command => command.type === "turn.start" && command.status === "completed")
+    .map(command => Number(command.controllerSeq)));
+  return commands.filter(command => {
+    if (command.status === "completed") return false;
+    if (outcomeUnknown(command)) {
+      return !(command.type === "turn.start" && Number(command.controllerSeq) < lastCompletedTurnStart);
+    }
+    return !((command.status === "failed" || command.status === "rejected") &&
+      !RUNNER_LIFECYCLE_COMMAND_TYPES.has(String(command.type)));
+  });
+}
+
 export function isSettledRemoteWarmControlState(control: Record<string, unknown>, identity: Record<string, unknown>): boolean {
   const commands = control.commands;
   const events = control.committedEvents;
-  if (!Array.isArray(commands) || commands.some(command => record(command).status !== "completed") ||
+  if (!Array.isArray(commands) || unsettledControllerCommands(commands.map(record)).length > 0 ||
       !Array.isArray(events) || Object.entries(identity).some(([key, value]) => record(control.identity)[key] !== value)) return false;
   const terminalIndex = events.findLastIndex(event => record(event).eventType === "run.terminal");
   if (terminalIndex < 0) return false;
@@ -101,7 +123,7 @@ export async function inspectRemoteWarmSessionRecovery(input: {
   matchesExecution: (previous: NativeExecutionInput) => boolean;
   loadCheckpoint: (previous: NativeExecutionInput) => PersistedNativeSession | null;
   canReuseProcess: (previous: NativeExecutionInput) => boolean;
-}): Promise<RemoteWarmSessionRecovery> {
+}): Promise<RemoteWarmSessionRecovery | null> {
   const deny = (): never => { throw new Error("runner_state_identity_mismatch: prior_owner_terminal_state_indeterminate"); };
   const { binding } = input.execution;
   const { target } = input;
@@ -110,6 +132,13 @@ export async function inspectRemoteWarmSessionRecovery(input: {
     const value = input.identity[key];
     if (typeof value !== "string" || !value) return deny();
     identity[key] = value;
+  }
+  // A Runner lives in the sandbox it started in. A created or replacement
+  // sandbox (for example after a restart or deploy replaced the controller)
+  // holds no Runner to adopt, so live adoption steps aside. Ordinary admission
+  // then retires the finished owner or keeps it held with a named reason.
+  if (target.transport === "sandbox" && ["created", "replacement"].includes(target.sandboxLeaseAcquisition?.outcome ?? "")) {
+    return null;
   }
   if (target.transport !== "sandbox" || !target.leaseId || !target.environmentId ||
       !target.providerKey || !target.sandboxLeaseAcquisition || target.sandboxLeaseAcquisition.outcome !== "resumed" ||
