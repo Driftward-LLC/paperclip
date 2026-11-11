@@ -10,8 +10,7 @@ use std::os::unix::fs::DirBuilderExt;
 use serde::{Deserialize, Serialize};
 
 use crate::acpx_provider_session::{
-    AcpxPermissionMode, AcpxProviderSessionConfig, AcpxProviderSessionIdentity, CursorMode,
-    PiThinkingLevel,
+    AcpxPermissionMode, AcpxProviderSessionConfig, AcpxProviderSessionIdentity, PiThinkingLevel,
 };
 use crate::durable::{
     create_private_temporary_file, open_private_regular_file, verify_private_directory,
