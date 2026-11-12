@@ -166,3 +166,43 @@ jobs:
           allowUpdates: false
           immutableCreate: false
           replacesArtifacts: false
+  promote_latest:
+    name: Promote latest stable image
+    needs: [source, publish, release_metadata]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: fork-release
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/driftward-llc/paperclip
+      VERSION: ${{ needs.source.outputs.version }}
+      REVISION: ${{ needs.source.outputs.sha }}
+      DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require the newest published stable release
+        id: latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/fork-ci/release-automation.py verify-latest
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        if: steps.latest.outputs.promote == 'true'
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: steps.latest.outputs.promote == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote the exact published digest without rebuilding
+        if: steps.latest.outputs.promote == 'true'
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --prefer-index=false --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+          actual=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE:latest")
+          test "$actual" = "$DIGEST"
+          printf '### Latest stable image\n\nVersion: `%s`\n\nPull: `%s:latest`\n\nDigest: `%s`\n' "$VERSION" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

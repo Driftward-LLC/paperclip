@@ -12,6 +12,7 @@ REPOSITORY = 'Driftward-LLC/paperclip'
 PREFIX = f'/repos/{REPOSITORY}'
 TAG = re.compile(r'driftward-v[0-9]+\.[0-9]+\.[0-9]+(?:[.-][a-zA-Z0-9.-]+)?')
 SHA = re.compile(r'[a-f0-9]{40}')
+STABLE_TAG = re.compile(r'driftward-v([0-9]+)\.([0-9]+)\.([0-9]+)')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -171,6 +172,45 @@ def verify_metadata(sha, version, digest, request=api):
     return re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', version) is None
 
 
+def latest_eligible(sha, version, digest, request=api):
+    if verify_metadata(sha, version, digest, request):
+        return False
+    tag = 'driftward-' + version
+    receipt = request('GET', '/releases/tags/' + urllib.parse.quote(tag, safe=''), missing=True)
+    if (not isinstance(receipt, dict) or receipt.get('tag_name') != tag or
+        receipt.get('draft') is not False or receipt.get('prerelease') is not False or
+        not isinstance(receipt.get('published_at'), str) or not receipt['published_at'] or
+        not isinstance(receipt.get('body'), str)):
+        raise ValueError('Published stable GitHub release receipt is required')
+    lines = receipt['body'].splitlines()
+    for field, expected in [('Image:', f'Image: `ghcr.io/driftward-llc/paperclip@{digest}`'),
+                            ('Source:', f'Source: `{sha}`')]:
+        if [line for line in lines if line.startswith(field)] != [expected]:
+            raise ValueError('GitHub release image/source receipt does not match the published image')
+    candidate = tuple(map(int, STABLE_TAG.fullmatch(tag).groups()))
+    current = False
+    newer = False
+    for release in pages('/releases', request):
+        if (not isinstance(release, dict) or not isinstance(release.get('tag_name'), str) or
+            type(release.get('draft')) is not bool or type(release.get('prerelease')) is not bool):
+            raise ValueError('Invalid GitHub release inventory')
+        if release['draft']:
+            continue
+        if not isinstance(release.get('published_at'), str) or not release['published_at']:
+            raise ValueError('Missing published GitHub release receipt')
+        stable = STABLE_TAG.fullmatch(release['tag_name'])
+        if release['prerelease'] or stable is None:
+            continue
+        number = tuple(map(int, stable.groups()))
+        if number == candidate and release['tag_name'] != tag:
+            raise ValueError('Ambiguous stable release version')
+        current = current or release['tag_name'] == tag
+        newer = newer or number > candidate
+    if not current:
+        raise ValueError('Published stable GitHub release is required before latest promotion')
+    return not newer
+
+
 if __name__ == '__main__':
     if os.environ.get('GITHUB_REPOSITORY') != REPOSITORY:
         raise ValueError('Unexpected release repository')
@@ -183,8 +223,13 @@ if __name__ == '__main__':
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write('prerelease=' + str(prerelease).lower() + '\n')
         result = 'Verified published image metadata'
+    elif sys.argv[1:] == ['verify-latest']:
+        promote = latest_eligible(os.environ['REVISION'], os.environ['VERSION'], os.environ['DIGEST'])
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write('promote=' + str(promote).lower() + '\n')
+        result = 'Verified latest promotion' if promote else 'Skipped latest promotion for a prerelease or superseded stable release'
     else:
-        raise ValueError('Expected start or verify-metadata')
+        raise ValueError('Expected start, verify-metadata or verify-latest')
     print(result)
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
         summary.write(result + '\n')
