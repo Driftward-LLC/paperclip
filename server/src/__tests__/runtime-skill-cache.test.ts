@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -39,8 +39,10 @@ async function makeReadonly(root: string): Promise<void> {
 describe("runtime skill revision cache", () => {
   let root: string;
   let skill: CompanySkill;
+  let children: { child: ChildProcess; closed: Promise<void> }[];
   const contents: Record<string, string> = { "SKILL.md": "# Test", "references/a.md": "Supporting content" };
   beforeEach(async () => {
+    children = [];
     root = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-cache-"));
     skill = { id: randomUUID(), companyId: randomUUID(), sourceType: "github", sourceLocator: "https://github.com/org/repo",
       sourceRef: "a".repeat(40), slug: "test", markdown: contents["SKILL.md"], metadata: { owner: "org", repo: "repo", repoSkillDir: "skills/test" },
@@ -51,7 +53,14 @@ describe("runtime skill revision cache", () => {
       currentVersionId: null, createdAt: new Date(0), updatedAt: new Date(0),
     };
   });
-  afterEach(async () => { await makeWritable(root); await fs.rm(root, { recursive: true, force: true }); });
+  afterEach(async () => {
+    for (const { child } of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+    await Promise.all(children.map(({ closed }) => closed));
+    await makeWritable(root);
+    await fs.rm(root, { recursive: true, force: true });
+  });
   const reader = () => vi.fn(async (file: string) => contents[file]);
 
   it("publishes complete contents once for twenty callers and leaves warm files untouched", async () => {
@@ -71,11 +80,15 @@ describe("runtime skill revision cache", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses the winning complete directory across concurrent processes and a process restart", async () => {
+  // A cold tsx child import measured 16.2s before cache work; this case boots three processes.
+  it("reuses the winning complete directory across concurrent processes and a process restart", { timeout: 60_000 }, async ({ signal }) => {
     const spec = runtimeSkillCacheSpec(root, skill)!;
-    const launch = () => new Promise<{ source: string; reads: number }>((resolve, reject) => {
+    const launch = (onReady: (child: ChildProcess) => void) => new Promise<{ source: string; reads: number }>((resolve, reject) => {
+      signal.throwIfAborted();
       const code = `
         import { resolveRuntimeSkillCache } from ${JSON.stringify(new URL("../services/runtime-skill-cache.ts", import.meta.url).href)};
+        process.send("ready");
+        await new Promise(resolve => process.once("message", resolve));
         let reads = 0;
         const source = await resolveRuntimeSkillCache(${JSON.stringify(spec)}, async (file) => {
           reads++;
@@ -83,18 +96,32 @@ describe("runtime skill revision cache", () => {
           return ${JSON.stringify(contents)}[file];
         });
         console.log(JSON.stringify({ source, reads }));
+        process.disconnect();
       `;
-      const child = spawn(process.execPath, ["--import", fileURLToPath(new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url)), "--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(process.execPath, ["--import", fileURLToPath(new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url)), "--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "pipe", "ipc"], signal, killSignal: "SIGKILL" });
+      children.push({ child, closed: new Promise(resolve => { child.once("close", () => resolve()); }) });
+      child.once("message", () => onReady(child));
       let output = "", errors = "";
       child.stdout.on("data", (chunk) => { output += chunk; });
       child.stderr.on("data", (chunk) => { errors += chunk; });
       child.on("error", reject);
-      child.on("exit", (exitCode) => exitCode === 0 ? resolve(JSON.parse(output)) : reject(new Error(errors)));
+      child.once("close", (exitCode, signal) => {
+        if (exitCode !== 0) return reject(new Error(`Cache child exited (${exitCode}/${signal}): ${errors}`));
+        try { resolve(JSON.parse(output)); } catch (error) { reject(error); }
+      });
     });
-    const [first, second] = await Promise.all([launch(), launch()]);
+    const wave = (count: number) => {
+      const ready: ChildProcess[] = [];
+      return Promise.all(Array.from({ length: count }, () => launch(child => {
+        ready.push(child);
+        if (ready.length === count) for (const worker of ready) worker.send("start");
+      })));
+    };
+    const [first, second] = await wave(2);
     expect(first.source).toBe(second.source);
+    expect(first.reads + second.reads).toBe(Object.keys(contents).length);
     expect(await fs.readdir(spec.root)).toEqual([spec.fingerprint]);
-    expect(await launch()).toEqual({ source: first.source, reads: 0 });
+    expect(await wave(1)).toEqual([{ source: first.source, reads: 0 }]);
   });
 
   it("releases a publication lock at once when its holder provably exited", async () => {
