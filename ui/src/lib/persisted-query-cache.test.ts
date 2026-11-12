@@ -72,6 +72,7 @@ describe("persisted read cache", () => {
   });
 
   it("bounds saved PR reads and retains their original age through later saves", () => {
+    vi.useFakeTimers();
     let now = Date.now();
     const first = setup(undefined, () => now); seed(first.client);
     for (let i = 0; i < 120; i += 1) first.client.setQueryData(
