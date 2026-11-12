@@ -102,8 +102,8 @@ describe("runtime skill revision cache", () => {
       children.push({ child, closed: new Promise(resolve => { child.once("close", () => resolve()); }) });
       child.once("message", () => onReady(child));
       let output = "", errors = "";
-      child.stdout.on("data", (chunk) => { output += chunk; });
-      child.stderr.on("data", (chunk) => { errors += chunk; });
+      child.stdout!.on("data", (chunk) => { output += chunk; });
+      child.stderr!.on("data", (chunk) => { errors += chunk; });
       child.on("error", reject);
       child.once("close", (exitCode, signal) => {
         if (exitCode !== 0) return reject(new Error(`Cache child exited (${exitCode}/${signal}): ${errors}`));
