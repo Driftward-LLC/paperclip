@@ -58,7 +58,7 @@ esac
 
     def test_only_driftward_workflow_definitions_remain(self):
         workflows = ROOT / '.github/workflows'
-        self.assertEqual({file.name for file in workflows.iterdir()}, {'fork-ci.yml', 'fork-release.yml'})
+        self.assertEqual({file.name for file in workflows.iterdir()}, {'fork-ci.yml', 'create-docker-release.yml'})
         for file in workflows.iterdir():
             self.assertNotRegex(file.read_text(), r'(?<![@\w-])paperclipai/paperclip(?![\w-])')
 
@@ -73,7 +73,7 @@ esac
 
     def test_ci_and_release_admission_remain_fork_owned(self):
         workflows = ROOT / '.github/workflows'
-        for file, names in [('fork-ci.yml', ['prepare', 'validation']), ('fork-release.yml', ['source'])]:
+        for file, names in [('fork-ci.yml', ['prepare', 'validation']), ('create-docker-release.yml', ['source'])]:
             workflow = yaml.safe_load((workflows / file).read_text())
             for name in names:
                 self.assertIn("github.repository == 'Driftward-LLC/paperclip'", workflow['jobs'][name]['if'])

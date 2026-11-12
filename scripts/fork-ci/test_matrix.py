@@ -99,7 +99,7 @@ class MatrixTest(unittest.TestCase):
     def test_fork_server_partition_retains_native_suites(self):
         args = ['node', 'scripts/run-vitest-stable.mjs', '--mode', 'general', '--group',
                 'general-server-without-chat', '--shard-index', '0', '--shard-count', '1', '--dry-run']
-        for file in ['fork-ci.yml', 'fork-release.yml']:
+        for file in ['fork-ci.yml', 'create-docker-release.yml']:
             workflow_name = yaml.safe_load((ROOT / '.github/workflows' / file).read_text())['name']
             with self.subTest(workflow=workflow_name):
                 result = subprocess.run(args, cwd=ROOT, env=dict(os.environ, GITHUB_WORKFLOW=workflow_name), capture_output=True, text=True, check=True)

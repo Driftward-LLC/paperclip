@@ -51,7 +51,7 @@ class GitHub:
 
     def existing_run(self, status='queued', conclusion=None):
         self.runs.append({'id': 18, 'head_sha': SOURCE, 'display_title': 'Docker release / ' + TAG,
-                          'path': '.github/workflows/fork-release.yml', 'event': 'workflow_dispatch',
+                          'path': '.github/workflows/create-docker-release.yml', 'event': 'workflow_dispatch',
                           'repository': {'full_name': automation.REPOSITORY}, 'status': status, 'conclusion': conclusion})
 
     def __call__(self, method, path, data=None, missing=False):
@@ -70,7 +70,7 @@ class GitHub:
             if parts.path.startswith('/git/ref/tags/'):
                 assert missing
                 return copy.deepcopy(self.refs.get(unquote(parts.path.removeprefix('/git/ref/tags/'))))
-            if parts.path == '/actions/workflows/fork-release.yml/runs':
+            if parts.path == '/actions/workflows/create-docker-release.yml/runs':
                 assert query['head_sha'] == [SOURCE]
                 return {'total_count': len(self.runs), 'workflow_runs': batch(self.runs)}
             if parts.path.startswith('/releases/tags/'):
@@ -101,7 +101,7 @@ class AutomaticReleaseTest(unittest.TestCase):
         self.assertIn(TAG, self.start(github))
         self.assertEqual(github.writes(), [
             ('POST', '/git/refs', {'ref': 'refs/tags/' + TAG, 'sha': SOURCE}),
-            ('POST', '/actions/workflows/fork-release.yml/dispatches', {'ref': TAG, 'inputs': {'tag': TAG}})])
+            ('POST', '/actions/workflows/create-docker-release.yml/dispatches', {'ref': TAG, 'inputs': {'tag': TAG}})])
 
     def test_pagination_and_date_allocation_count_existing_tags_even_without_releases(self):
         github = GitHub()
@@ -126,7 +126,7 @@ class AutomaticReleaseTest(unittest.TestCase):
         github.tag_error = True
         self.assertIn(TAG, self.start(github))
         self.assertEqual(len(github.refs), 1)
-        self.assertEqual(github.writes()[-1][1], '/actions/workflows/fork-release.yml/dispatches')
+        self.assertEqual(github.writes()[-1][1], '/actions/workflows/create-docker-release.yml/dispatches')
 
     def test_tag_write_failure_never_moves_or_replaces_another_target(self):
         github = GitHub()
@@ -168,7 +168,7 @@ class AutomaticReleaseTest(unittest.TestCase):
         github.existing_tag()
         github.release = {'tag_name': TAG, 'draft': False, 'body': 'Human release notes'}
         self.assertIn('Started release', self.start(github))
-        self.assertEqual([path for _, path, _ in github.writes()], ['/actions/workflows/fork-release.yml/dispatches'])
+        self.assertEqual([path for _, path, _ in github.writes()], ['/actions/workflows/create-docker-release.yml/dispatches'])
 
     def test_annotated_manual_tags_resolve_to_the_commit_and_tag_cycles_fail_closed(self):
         github = GitHub()
@@ -332,7 +332,7 @@ class ApiBoundaryTest(unittest.TestCase):
 
 class WorkflowBoundaryTest(unittest.TestCase):
     def test_auto_start_and_metadata_keep_permissions_separate_from_reusable_ci(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/fork-release.yml').read_text())
+        workflow = yaml.safe_load((ROOT / '.github/workflows/create-docker-release.yml').read_text())
         self.assertEqual(workflow[True]['workflow_run'], {'workflows': ['CI'], 'types': ['completed'], 'branches': ['master']})
         auto = workflow['jobs']['automatic_start']
         self.assertEqual(auto['permissions'], {'contents': 'write', 'actions': 'write'})
@@ -368,7 +368,7 @@ class WorkflowBoundaryTest(unittest.TestCase):
         self.assertFalse(any('write' in job.get('permissions', {}).values() for job in ci['jobs'].values()))
 
     def test_starter_and_image_runs_use_separate_groups_and_observable_titles(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/fork-release.yml').read_text())
+        workflow = yaml.safe_load((ROOT / '.github/workflows/create-docker-release.yml').read_text())
         expressions = [workflow['concurrency']['group'].strip()[3:-2], workflow['run-name'].strip()[3:-2]]
         cases = [
             [{'event_name': 'workflow_run', 'event': {'workflow_run': {'id': 17}}}, {},
@@ -382,7 +382,7 @@ class WorkflowBoundaryTest(unittest.TestCase):
         subprocess.run(['node', '-e', code, json.dumps({'expressions': expressions, 'cases': cases})], check=True, capture_output=True, text=True)
 
     def test_job_event_conditions_prevent_pr_tag_reusable_and_completion_loops(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/fork-release.yml').read_text())
+        workflow = yaml.safe_load((ROOT / '.github/workflows/create-docker-release.yml').read_text())
         automatic = workflow['jobs']['automatic_start']['if'].strip()[3:-2]
         source = workflow['jobs']['source']['if']
         run = GitHub().ci
@@ -390,7 +390,7 @@ class WorkflowBoundaryTest(unittest.TestCase):
         for name, overrides, expected in [
             ('trusted completion', {}, True), ('PR completion', {'event': 'pull_request'}, False),
             ('failed completion', {'conclusion': 'failure'}, False), ('foreign source', {'head_repository': {'full_name': 'elsewhere/repo'}}, False),
-            ('other workflow', {'path': '.github/workflows/fork-release.yml'}, False)]:
+            ('other workflow', {'path': '.github/workflows/create-docker-release.yml'}, False)]:
             github = {'repository': automation.REPOSITORY, 'event_name': 'workflow_run', 'ref': 'refs/heads/master',
                       'event': {'workflow_run': {**run, **overrides}}}
             contexts.append([name, github, expected, False])
