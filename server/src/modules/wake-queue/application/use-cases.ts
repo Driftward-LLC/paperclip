@@ -1,5 +1,6 @@
 import { readWakeChatConversationId } from "../../run-dispatch/index.js";
 import { enrichPromotedWakeContext, wakeMustNotJoinActiveRun } from "../domain/context.js";
+import { QUEUED_MESSAGES_DELIVERED_REASON } from "../domain/policy.js";
 import {
   decideQueuedCommentAction,
   decideReleaseRecovery,
@@ -54,6 +55,7 @@ const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = new Set([
   "cancelled",
 ]);
 const STRANDED_ISSUE_RECOVERY_ORIGIN_KIND = "stranded_issue_recovery";
+const INTERRUPTED_PREPARATION_RETRY_REASON = "interrupted_preparation";
 
 function isExecutionReviewParticipantRecoveryRun(run: Pick<RunSnapshot, "contextSnapshot">): boolean {
   return readNonEmptyString(run.contextSnapshot.retryReason) === EXECUTION_REVIEW_PARTICIPANT_RECOVERY_RETRY_REASON;
@@ -70,7 +72,8 @@ function didAutomaticRecoveryFail(
   expectedRetryReason: "assignment_recovery" | "issue_continuation_needed",
 ): boolean {
   const latestRetryReason = readNonEmptyString(run.contextSnapshot.retryReason);
-  return latestRetryReason === expectedRetryReason && UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES.has(run.status);
+  return (latestRetryReason === expectedRetryReason || latestRetryReason === INTERRUPTED_PREPARATION_RETRY_REASON)
+    && UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES.has(run.status);
 }
 
 function currentAgentParticipant(issue: IssueSnapshot): { agentId: string } | null {
@@ -272,7 +275,7 @@ async function runReleaseDrain(
         reason: commentAction.selfAuthored
           ? "Deferred wake contained only comments authored by the finishing run"
           : liveness.deliveredCommentIds?.length
-            ? "Queued messages were already delivered to a completed run"
+            ? QUEUED_MESSAGES_DELIVERED_REASON
             : "Queued messages were discarded before promotion",
         now: input.now,
       });
@@ -625,6 +628,7 @@ async function runReleaseRecoveryTail(
         run,
         expectedRetryReason,
       ),
+      automaticRecoveryRetryableBeforeProviderWork: run.retryableBeforeProviderWork === true,
       sourceRequiresExplicitRecovery,
     },
     shared: {
@@ -719,6 +723,7 @@ async function runReleaseRecoveryTail(
     retryReason,
     source: recoverySource,
     retryOfRunId: run.id,
+    ...(run.executionRetryAccounting ? { executionRetryAccounting: run.executionRetryAccounting } : {}),
   };
 
   const recoveryResponsibleUserId = await resolveResponsibleUserForQueuedRun(

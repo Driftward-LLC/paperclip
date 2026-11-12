@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -39,8 +39,10 @@ async function makeReadonly(root: string): Promise<void> {
 describe("runtime skill revision cache", () => {
   let root: string;
   let skill: CompanySkill;
+  let children: { child: ChildProcess; closed: Promise<void> }[];
   const contents: Record<string, string> = { "SKILL.md": "# Test", "references/a.md": "Supporting content" };
   beforeEach(async () => {
+    children = [];
     root = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-cache-"));
     skill = { id: randomUUID(), companyId: randomUUID(), sourceType: "github", sourceLocator: "https://github.com/org/repo",
       sourceRef: "a".repeat(40), slug: "test", markdown: contents["SKILL.md"], metadata: { owner: "org", repo: "repo", repoSkillDir: "skills/test" },
@@ -51,7 +53,14 @@ describe("runtime skill revision cache", () => {
       currentVersionId: null, createdAt: new Date(0), updatedAt: new Date(0),
     };
   });
-  afterEach(async () => { await makeWritable(root); await fs.rm(root, { recursive: true, force: true }); });
+  afterEach(async () => {
+    for (const { child } of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+    await Promise.all(children.map(({ closed }) => closed));
+    await makeWritable(root);
+    await fs.rm(root, { recursive: true, force: true });
+  });
   const reader = () => vi.fn(async (file: string) => contents[file]);
 
   it("publishes complete contents once for twenty callers and leaves warm files untouched", async () => {
@@ -71,11 +80,15 @@ describe("runtime skill revision cache", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses the winning complete directory across concurrent processes and a process restart", async () => {
+  // A cold tsx child import measured 16.2s before cache work; this case boots three processes.
+  it("reuses the winning complete directory across concurrent processes and a process restart", { timeout: 60_000 }, async ({ signal }) => {
     const spec = runtimeSkillCacheSpec(root, skill)!;
-    const launch = () => new Promise<{ source: string; reads: number }>((resolve, reject) => {
+    const launch = (onReady: (child: ChildProcess) => void) => new Promise<{ source: string; reads: number }>((resolve, reject) => {
+      signal.throwIfAborted();
       const code = `
         import { resolveRuntimeSkillCache } from ${JSON.stringify(new URL("../services/runtime-skill-cache.ts", import.meta.url).href)};
+        process.send("ready");
+        await new Promise(resolve => process.once("message", resolve));
         let reads = 0;
         const source = await resolveRuntimeSkillCache(${JSON.stringify(spec)}, async (file) => {
           reads++;
@@ -83,18 +96,32 @@ describe("runtime skill revision cache", () => {
           return ${JSON.stringify(contents)}[file];
         });
         console.log(JSON.stringify({ source, reads }));
+        process.disconnect();
       `;
-      const child = spawn(process.execPath, ["--import", fileURLToPath(new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url)), "--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(process.execPath, ["--import", fileURLToPath(new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url)), "--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "pipe", "ipc"], signal, killSignal: "SIGKILL" });
+      children.push({ child, closed: new Promise(resolve => { child.once("close", () => resolve()); }) });
+      child.once("message", () => onReady(child));
       let output = "", errors = "";
-      child.stdout.on("data", (chunk) => { output += chunk; });
-      child.stderr.on("data", (chunk) => { errors += chunk; });
+      child.stdout!.on("data", (chunk) => { output += chunk; });
+      child.stderr!.on("data", (chunk) => { errors += chunk; });
       child.on("error", reject);
-      child.on("exit", (exitCode) => exitCode === 0 ? resolve(JSON.parse(output)) : reject(new Error(errors)));
+      child.once("close", (exitCode, signal) => {
+        if (exitCode !== 0) return reject(new Error(`Cache child exited (${exitCode}/${signal}): ${errors}`));
+        try { resolve(JSON.parse(output)); } catch (error) { reject(error); }
+      });
     });
-    const [first, second] = await Promise.all([launch(), launch()]);
+    const wave = (count: number) => {
+      const ready: ChildProcess[] = [];
+      return Promise.all(Array.from({ length: count }, () => launch(child => {
+        ready.push(child);
+        if (ready.length === count) for (const worker of ready) worker.send("start");
+      })));
+    };
+    const [first, second] = await wave(2);
     expect(first.source).toBe(second.source);
+    expect(first.reads + second.reads).toBe(Object.keys(contents).length);
     expect(await fs.readdir(spec.root)).toEqual([spec.fingerprint]);
-    expect(await launch()).toEqual({ source: first.source, reads: 0 });
+    expect(await wave(1)).toEqual([{ source: first.source, reads: 0 }]);
   });
 
   it("releases a publication lock at once when its holder provably exited", async () => {
@@ -185,6 +212,62 @@ describe("runtime skill revision cache", () => {
     expect(await runtimeSkillCacheLockHolderExited(lockStamp({ ...here, pid: process.pid }))).toBe(false);
     expect(await runtimeSkillCacheLockHolderExited(lockStamp(currentControllerProcessStamp()))).toBe(false);
     expect(await runtimeSkillCacheLockHolderExited(Buffer.from("not json"))).toBe(false);
+  });
+
+  it("releases a lock whose holder ran in a deployment the platform replaced", async () => {
+    // A Railway redeploy starts the server in a new process space, so a PID
+    // proof never applies. The platform stopped the earlier deployment, which
+    // held the same exclusive volume, before it started this one.
+    const railway = { RAILWAY_PROJECT_ID: "project", RAILWAY_ENVIRONMENT_ID: "environment", RAILWAY_SERVICE_ID: "service",
+      RAILWAY_DEPLOYMENT_ID: "deployment-new", RAILWAY_VOLUME_ID: "volume", RAILWAY_VOLUME_MOUNT_PATH: "/data" };
+    for (const [key, value] of Object.entries(railway)) vi.stubEnv(key, value);
+    try {
+      const worker = { provider: "railway", projectId: "project", environmentId: "environment", serviceId: "service" };
+      const holder = { bootId: randomUUID(), pid: 3, hostHash: "f".repeat(32), processStartedAt: null,
+        deployment: { worker: { ...worker, deploymentId: "deployment-old" }, exclusiveVolume: true, volumeId: "volume" } };
+      expect(await runtimeSkillCacheLockHolderExited(lockStamp(holder))).toBe(true);
+      // Only a replaced deployment on the same exclusive volume is proof.
+      const deployment = holder.deployment;
+      for (const changed of [{ ...deployment, worker: { ...worker, deploymentId: "deployment-new" } },
+        { ...deployment, volumeId: "another-volume" }, { ...deployment, exclusiveVolume: false },
+        { ...deployment, worker: { ...worker, serviceId: "another-service", deploymentId: "deployment-old" } }]) {
+        expect(await runtimeSkillCacheLockHolderExited(lockStamp({ ...holder, deployment: changed }))).toBe(false);
+      }
+      const { deployment: _omitted, ...withoutDeployment } = holder;
+      expect(await runtimeSkillCacheLockHolderExited(lockStamp(withoutDeployment))).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps a lock held when the holder proof stalls or fails", async () => {
+    // A distinct holder per case: a still-pending proof is joined by later waits on the same holder.
+    const holder = () => ({ bootId: randomUUID(), pid: 3, hostHash: "f".repeat(32), processStartedAt: null });
+    const startedAt = Date.now();
+    expect(await runtimeSkillCacheLockHolderExited(lockStamp(holder()),
+      { timeoutMs: 50, prove: () => new Promise(() => {}) })).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(await runtimeSkillCacheLockHolderExited(lockStamp(holder()),
+      { prove: async () => { throw new Error("database unavailable"); } })).toBe(false);
+    expect(await runtimeSkillCacheLockHolderExited(lockStamp(holder()),
+      { prove: async () => ({ verdict: "gone", reason: "controller_stopped" }) })).toBe(true);
+  });
+
+  it("joins a stalled holder proof instead of starting another read on every timeout", async () => {
+    const holder = { bootId: randomUUID(), pid: 3, hostHash: "f".repeat(32), processStartedAt: null };
+    let settle!: (proof: { verdict: "gone"; reason: "controller_stopped" }) => void;
+    const prove = vi.fn(() => new Promise<{ verdict: "gone"; reason: "controller_stopped" }>(resolve => { settle = resolve; }));
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(await runtimeSkillCacheLockHolderExited(lockStamp(holder), { timeoutMs: 10, prove })).toBe(false);
+    }
+    expect(prove).toHaveBeenCalledTimes(1);
+    settle({ verdict: "gone", reason: "controller_stopped" });
+    expect(await runtimeSkillCacheLockHolderExited(lockStamp(holder), { timeoutMs: 1_000, prove })).toBe(true);
+    // A settled proof is not reused: the next wait asks again.
+    await new Promise(resolve => setImmediate(resolve));
+    const fresh = vi.fn(async () => ({ verdict: "alive" as const, reason: "controller_lease_held" as const }));
+    expect(await runtimeSkillCacheLockHolderExited(lockStamp(holder), { prove: fresh })).toBe(false);
+    expect(fresh).toHaveBeenCalledTimes(1);
   });
 
   it("fingerprints installed content and ownership, excluding cosmetic metadata", async () => {

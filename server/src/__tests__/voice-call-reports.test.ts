@@ -1,3 +1,4 @@
+import { setImmediate as immediate } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
@@ -20,6 +21,7 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
   let coordinator: ReturnType<typeof createDeliveryWorkCoordinator> | undefined;
   let enabled = true;
   const errors: unknown[] = [];
+  const evaluations = new Set<Promise<unknown>>();
   const fixtureCompanies: string[] = [];
   const day = 86_400_000;
   const result = (): SpekoCallReport => ({ complete: true, transcript: [], costMicroUsd: "100", durationSeconds: 10, providerUpdatedAt: new Date() });
@@ -68,6 +70,13 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
   }
   async function start(service = voiceCallReports(db, fetchReport)) {
     coordinator = createDeliveryWorkCoordinator({ owner: db, canRun: () => enabled, canReconcile: () => true, onError: error => errors.push(error) });
+    const register = coordinator.register;
+    vi.spyOn(coordinator, "register").mockImplementation((queue, task) => register(queue, { ...task, run: signal => {
+      const work = task.run(signal);
+      evaluations.add(work);
+      void work.then(() => evaluations.delete(work), () => evaluations.delete(work));
+      return work;
+    } }));
     await service.register(coordinator, () => enabled).ready;
     return service;
   }
@@ -251,12 +260,18 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
     const other = await fixture(); const last = await session({ ...other, id: "ffffffff-ffff-ffff-ffff-ffffffffffff" });
     fetchReport.mockImplementation(async call => { if (call.id === broken.id) throw new Error("unavailable"); return result(); });
     await start(); expect(fetchReport).toHaveBeenCalledTimes(25);
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(fetchReport).toHaveBeenCalledTimes(50), { interval: 0 });
+    const advance = async () => {
+      await Promise.allSettled([...evaluations]);
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.allSettled([...evaluations]);
+      await immediate();
+    };
+    await advance();
+    expect(fetchReport).toHaveBeenCalledTimes(50);
     expect(fetchReport.mock.calls.slice(25, 50).some(([call]) => call.id === last.id)).toBe(true);
     for (let pass = 0; pass < 20; pass++) {
-      await vi.advanceTimersByTimeAsync(1000);
-      await vi.waitFor(() => expect(coordinator!.nextWakeAt() !== null || idleWorkSnapshot().active === 0).toBe(true), { interval: 0 });
+      await advance();
+      expect(coordinator!.nextWakeAt() !== null || idleWorkSnapshot().active === 0).toBe(true);
     }
     expect(fetchReport).toHaveBeenCalledTimes(105);
     await vi.waitFor(() => expect(idleWorkSnapshot().active).toBe(0), { interval: 0 });
