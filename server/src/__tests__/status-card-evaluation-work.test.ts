@@ -70,28 +70,38 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
     coordinator = createDeliveryWorkCoordinator({ owner: db, canRun: () => !draining, canReconcile: () => true,
       onError: error => errors.push(error) });
     evaluation = service;
-    cardWorker = registerStatusCardEvaluationWork(coordinator, { ...service, run: signal => {
-      const work = service.run(signal);
+    const register = coordinator.register;
+    vi.spyOn(coordinator, "register").mockImplementation((queue, task) => register(queue, { ...task, run: signal => {
+      const work = task.run(signal);
       evaluations.add(work);
       void work.then(() => evaluations.delete(work), () => evaluations.delete(work));
       return work;
-    } }, () => !draining);
+    } }));
+    cardWorker = registerStatusCardEvaluationWork(coordinator, service, () => !draining);
     await cardWorker.ready;
   }
   async function idleSchedule() {
     return db.transaction(tx => evaluation.readIdleSchedule(tx, Date.now(), cardWorker.reconciliationSnapshot));
   }
   async function settled() {
-    // Do not leap across PostgreSQL connect timers while real I/O is pending.
-    // Await actual domain work, then require several settled event-loop turns
-    // so a transient zero hold cannot stand in for transaction reconciliation.
+    const joinPass = async () => {
+      do {
+        await Promise.allSettled([...evaluations]);
+        await immediate();
+        // Rollback reconciliation can await SQL before the registered run starts.
+        // A running coordinator has no armed wake; let its real I/O finish first.
+      } while (idleWorkSnapshot().active > 0 && coordinator!.nextWakeAt() === null);
+    };
+    // Join complete passes, including deadline SQL, before advancing another
+    // notification/retry turn. Bound virtual turns rather than real database I/O.
     for (let turn = 0; turn < 3; turn++) {
-      await vi.waitFor(async () => {
-        await Promise.allSettled([...evaluations]);
+      for (let attempt = 0; attempt < 100; attempt++) {
+        await joinPass();
         await vi.advanceTimersByTimeAsync(500);
-        await Promise.allSettled([...evaluations]);
-        expect(idleWorkSnapshot().active).toBe(0);
-      }, { timeout: 5000 });
+        await joinPass();
+        if (idleWorkSnapshot().active === 0) break;
+      }
+      expect(idleWorkSnapshot().active).toBe(0);
       await immediate();
     }
   }
