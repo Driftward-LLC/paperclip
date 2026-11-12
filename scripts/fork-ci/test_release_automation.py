@@ -37,6 +37,7 @@ class GitHub:
         self.refs = {}
         self.runs = []
         self.release = None
+        self.releases = []
         self.calls = []
         self.master = [SOURCE]
         self.tag_error = False
@@ -67,6 +68,7 @@ class GitHub:
                 sha = self.master.pop(0) if len(self.master) > 1 else self.master[0]
                 return {'object': {'sha': sha}}
             if parts.path == '/tags': return batch(self.tags)
+            if parts.path == '/releases': return batch(self.releases)
             if parts.path.startswith('/git/ref/tags/'):
                 assert missing
                 return copy.deepcopy(self.refs.get(unquote(parts.path.removeprefix('/git/ref/tags/'))))
@@ -330,7 +332,185 @@ class ApiBoundaryTest(unittest.TestCase):
             self.assertNotIn('test-token', str(raised.exception))
 
 
+class LatestPromotionTest(unittest.TestCase):
+    def release(self, tag=TAG, **changes):
+        return {'tag_name': tag, 'draft': False, 'prerelease': False,
+            'published_at': '2026-11-10T12:00:00Z',
+            'body': f'Image: `ghcr.io/driftward-llc/paperclip@{DIGEST}`\n\nSource: `{SOURCE}`\n\nHuman notes stay intact.', **changes}
+
+    def github(self):
+        github = GitHub()
+        github.existing_tag()
+        github.release = self.release()
+        github.releases = [copy.deepcopy(github.release)]
+        return github
+
+    def eligible(self, github):
+        return automation.latest_eligible(SOURCE, 'v2026.1110.0', DIGEST, github)
+
+    def test_first_promotion_and_retry_are_read_only_and_preserve_human_notes(self):
+        github = self.github()
+        receipt = copy.deepcopy(github.release)
+        for _ in range(2): self.assertTrue(self.eligible(github))
+        self.assertEqual(github.release, receipt)
+        self.assertEqual(github.writes(), [])
+
+    def test_older_metadata_retry_cannot_replace_a_newer_published_stable_release(self):
+        for newer in ['driftward-v2026.1110.1', 'driftward-v2026.1111.0', 'driftward-v2027.101.0']:
+            github = self.github()
+            github.releases.insert(0, self.release(newer))
+            self.assertFalse(self.eligible(github))
+            self.assertEqual(github.writes(), [])
+
+    def test_version_order_is_numeric_and_not_publication_order(self):
+        github = self.github()
+        github.existing_tag('driftward-v2026.1110.9')
+        github.release = self.release('driftward-v2026.1110.9')
+        github.releases = [self.release('driftward-v2026.1110.10'), github.release]
+        self.assertFalse(automation.latest_eligible(SOURCE, 'v2026.1110.9', DIGEST, github))
+        github.existing_tag('driftward-v2026.1110.10')
+        github.release = self.release('driftward-v2026.1110.10')
+        self.assertTrue(automation.latest_eligible(SOURCE, 'v2026.1110.10', DIGEST, github))
+
+    def test_drafts_prereleases_nonfork_releases_and_unpublished_images_do_not_supersede(self):
+        github = self.github()
+        github.releases += [self.release('driftward-v2026.1111.0', draft=True, published_at=None),
+            self.release('driftward-v2026.1111.0', prerelease=True),
+            self.release('driftward-v2026.1111.0-rc.1', prerelease=True), self.release('v2027.101.0')]
+        # An immutable tag/image without a published GitHub release is not a release.
+        github.existing_tag('driftward-v2026.1112.0', OTHER)
+        self.assertTrue(self.eligible(github))
+
+    def test_candidate_prerelease_is_skipped(self):
+        github = self.github()
+        tag = TAG + '-rc.1'
+        github.existing_tag(tag)
+        github.release = self.release(tag, prerelease=True)
+        self.assertFalse(automation.latest_eligible(SOURCE, 'v2026.1110.0-rc.1', DIGEST, github))
+        self.assertFalse(any(path.startswith('/releases?') for _, path, _ in github.calls))
+
+    def test_all_release_pages_are_checked_before_promotion(self):
+        github = self.github()
+        github.releases += [self.release('unrelated-' + str(index)) for index in range(99)]
+        github.releases.append(self.release('driftward-v2026.1111.0'))
+        self.assertFalse(self.eligible(github))
+        self.assertTrue(any('/releases?per_page=100&page=2' == path for _, path, _ in github.calls))
+
+    def test_missing_or_conflicting_image_source_receipts_fail_closed(self):
+        github = self.github()
+        body = github.release['body']
+        for invalid in ['', None, body.replace(DIGEST, 'sha256:' + 'd' * 64),
+                        body.replace(SOURCE, OTHER), body + '\nImage: `another image`',
+                        body + '\nSource: `' + SOURCE + '`']:
+            with self.subTest(body=invalid):
+                github = self.github()
+                github.release['body'] = invalid
+                with self.assertRaises(ValueError): self.eligible(github)
+                self.assertEqual(github.writes(), [])
+
+    def test_candidate_must_be_published_stable_in_both_exact_receipt_and_inventory(self):
+        github = self.github()
+        github.release = None
+        with self.assertRaises(ValueError): self.eligible(github)
+        for changes in [{'draft': True}, {'prerelease': True}, {'published_at': None}]:
+            github = self.github()
+            github.release.update(changes)
+            with self.assertRaises(ValueError): self.eligible(github)
+        for release in [None, *[self.release(**changes) for changes in
+                               [{'draft': True}, {'prerelease': True}, {'published_at': None}]]]:
+            github = self.github()
+            github.releases = [] if release is None else [release]
+            with self.assertRaises(ValueError): self.eligible(github)
+
+    def test_malformed_or_ambiguous_inventory_fails_closed(self):
+        for record in [None, {}, self.release(draft='false'), self.release(prerelease=None),
+                       self.release(published_at=None), self.release('driftward-v02026.1110.0')]:
+            github = self.github()
+            github.releases.append(record)
+            with self.assertRaises(ValueError): self.eligible(github)
+
+    def test_inventory_errors_never_mean_no_newer_release(self):
+        for failure in ['HTTP 401', 'HTTP 403', 'HTTP 429', 'network error']:
+            github = self.github()
+            def failed(method, path, data=None, **kwargs):
+                if path.startswith('/releases?'): raise RuntimeError(failure)
+                return github(method, path, data, **kwargs)
+            with self.assertRaisesRegex(RuntimeError, failure):
+                automation.latest_eligible(SOURCE, 'v2026.1110.0', DIGEST, failed)
+
+    def test_cli_outputs_boolean_only_after_read_only_verification(self):
+        for newer, wanted in [(False, 'true'), (True, 'false')]:
+            with tempfile.TemporaryDirectory() as directory:
+                output, summary = Path(directory) / 'output', Path(directory) / 'summary'
+                github = self.github()
+                if newer: github.releases.append(self.release('driftward-v2026.1111.0'))
+                responses = [io.BytesIO(json.dumps(github.refs[TAG]).encode()),
+                    io.BytesIO(json.dumps(github.release).encode()), io.BytesIO(json.dumps(github.release).encode()),
+                    io.BytesIO(json.dumps(github.releases).encode())]
+                environment = {'GITHUB_REPOSITORY': automation.REPOSITORY, 'GITHUB_TOKEN': 'test-token',
+                    'REVISION': SOURCE, 'VERSION': 'v2026.1110.0', 'DIGEST': DIGEST,
+                    'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary)}
+                with patch.dict(os.environ, environment, clear=True), patch('sys.argv', ['release-automation.py', 'verify-latest']), patch('urllib.request.build_opener') as build, patch('sys.stdout', new_callable=io.StringIO):
+                    build.return_value.open.side_effect = responses
+                    runpy.run_path(str(Path(automation.__file__)), run_name='__main__')
+                self.assertEqual(output.read_text(), 'promote=' + wanted + '\n')
+                self.assertEqual([call.args[0].get_method() for call in build.return_value.open.call_args_list], ['GET'] * 4)
+
+
 class WorkflowBoundaryTest(unittest.TestCase):
+    def test_latest_promotion_follows_metadata_under_the_publisher_lock(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/fork-release.yml').read_text())
+        latest = workflow['jobs']['promote_latest']
+        self.assertEqual(latest['needs'], ['source', 'publish', 'release_metadata'])
+        self.assertEqual(latest['environment'], 'fork-release')
+        self.assertEqual(latest['permissions'], {'contents': 'read', 'packages': 'write'})
+        self.assertNotIn('concurrency', latest)
+        self.assertNotIn('if', latest)
+        self.assertFalse(workflow['concurrency']['cancel-in-progress'])
+        self.assertEqual(latest['env'], {'IMAGE': 'ghcr.io/driftward-llc/paperclip',
+            'VERSION': '${{ needs.source.outputs.version }}', 'REVISION': '${{ needs.source.outputs.sha }}',
+            'DIGEST': '${{ needs.publish.outputs.digest }}'})
+        guard = latest['steps'][1]
+        self.assertEqual(guard['run'], 'python3 scripts/fork-ci/release-automation.py verify-latest')
+        self.assertEqual(guard['env'], {'GITHUB_TOKEN': '${{ secrets.GITHUB_TOKEN }}'})
+        for step in latest['steps'][2:]: self.assertEqual(step['if'], "steps.latest.outputs.promote == 'true'")
+        login = latest['steps'][3]
+        self.assertEqual(login['uses'], workflow['jobs']['publish']['steps'][3]['uses'])
+        self.assertEqual(login['with']['password'], '${{ secrets.GITHUB_TOKEN }}')
+        self.assertNotIn('GH_PACKAGES_READ_TOKEN', str(latest))
+
+    def test_native_promotion_preserves_digest_and_propagates_write_read_and_integrity_failures(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/fork-release.yml').read_text())
+        source = workflow['jobs']['promote_latest']['steps'][-1]['run']
+        image = 'ghcr.io/driftward-llc/paperclip'
+        for create, inspect, digest, success in [('0', '0', DIGEST, True), ('9', '0', DIGEST, False),
+                                                ('0', '11', DIGEST, False), ('0', '0', 'sha256:' + 'd' * 64, False)]:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                docker = root / 'docker'
+                docker.write_text('''#!/usr/bin/env python3
+import json,os,sys
+with open(os.environ['CALLS'], 'a') as log: log.write(json.dumps(sys.argv[1:]) + '\\n')
+if sys.argv[3] == 'create': sys.exit(int(os.environ['CREATE_EXIT']))
+if sys.argv[3] == 'inspect':
+    print(os.environ['ACTUAL_DIGEST'])
+    sys.exit(int(os.environ['INSPECT_EXIT']))
+sys.exit(99)
+''')
+                docker.chmod(0o755)
+                environment = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}', IMAGE=image,
+                    VERSION='v2026.1110.0', DIGEST=DIGEST, CALLS=str(root / 'calls'),
+                    GITHUB_STEP_SUMMARY=str(root / 'summary'), CREATE_EXIT=create, INSPECT_EXIT=inspect,
+                    ACTUAL_DIGEST=digest)
+                result = subprocess.run(['bash', '-c', source], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+                self.assertEqual(calls[0], ['buildx', 'imagetools', 'create', '--prefer-index=false',
+                    '--tag', image + ':latest', image + '@' + DIGEST])
+                if create == '0':
+                    self.assertEqual(calls[1], ['buildx', 'imagetools', 'inspect', '--format', '{{.Manifest.Digest}}', image + ':latest'])
+                self.assertEqual((root / 'summary').exists(), success)
+
     def test_auto_start_and_metadata_keep_permissions_separate_from_reusable_ci(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/fork-release.yml').read_text())
         self.assertEqual(workflow[True]['workflow_run'], {'workflows': ['CI'], 'types': ['completed'], 'branches': ['master']})

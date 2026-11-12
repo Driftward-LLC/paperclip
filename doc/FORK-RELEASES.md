@@ -102,8 +102,8 @@ a branch is rejected. This is release intent, separate from production deploymen
 The `Docker release` workflow resolves the tag once, requires master ancestry, reruns full CI on
 that SHA, builds once, checks health and HTML using a fresh anonymous data volume,
 and pushes that same smoke-tested image. The smoke creates no companies/agents
-and uses no provider credentials or host data. Only the publish job has package
-write permission. The run summary records the source SHA and image digest.
+and uses no provider credentials or host data. Only the publish and latest-promotion
+jobs have package write permission. The run summary records the source SHA and image digest.
 Only after that job succeeds, a separate job with `contents: write` verifies the
 immutable source and uses the pinned Marketplace **Create Release** action
 (`ncipollo/release-action`) to record the digest, source SHA, and build link.
@@ -114,8 +114,27 @@ metadata publication fails, rerun the failed job rather than rebuilding or
 republishing the image.
 Actual deployment remains a separate manual decision.
 
-Published tags are `v2026.1107.0` and `sha-<full-40-character-commit>`; no `latest`
-or mutable channel is written. The workflow serializes releases and uses authenticated GitHub Packages inventory
+Published immutable tags are `v2026.1107.0` and `sha-<full-40-character-commit>`.
+After GitHub release publication succeeds, a separate job promotes the newest
+published stable fork release to `ghcr.io/driftward-llc/paperclip:latest`. It checks
+the release's exact image/source receipt and every page of GitHub releases,
+comparing version components numerically. Drafts, prereleases, and images without
+published GitHub releases do not advance this channel. Older releases and their
+metadata-only retries cannot replace a newer published stable version.
+
+Promotion shares the existing workflow-level publisher lock, including retries;
+the automatic starter retains its separate lock. The job uses the existing pinned
+Docker setup/login actions and native `buildx imagetools create --prefer-index=false`
+from the published digest, without rebuilding. It verifies that `latest` resolves
+to that identical digest. API failures, malformed inventory, conflicting receipts,
+and digest mismatches fail closed. If promotion alone fails, rerun that failed job;
+the immutable image and GitHub release remain intact. The job uses the existing
+tag-only `fork-release` environment, so its second environment record is release
+publication bookkeeping, not a server deployment. Keep deployment receipts pinned
+to the resolved digest because `latest` can advance. Existing images and workflow
+versions are not changed retroactively by this convention.
+
+The workflow serializes releases and uses authenticated GitHub Packages inventory
 and version metadata to refuse existing version/SHA tags. A successful empty
 inventory supports the first package publication; HTTP authorization errors,
 missing endpoints, rate limits, malformed data, and network errors fail closed.
@@ -153,6 +172,14 @@ Copy the digest from the successful run summary:
 ```sh
 docker pull ghcr.io/driftward-llc/paperclip@sha256:<digest>
 ```
+
+For an optional Compose channel, set the app image to
+`ghcr.io/driftward-llc/paperclip:latest` and allow pulls with `pull_policy: missing`
+instead of `never`. Compose refreshes the `latest` tag even with `missing`
+([pull policy](https://docs.docker.com/reference/compose-file/services/#pull_policy)).
+After the manual deployment decision and backup, run `docker compose pull paperclip`
+then `docker compose up -d --no-deps paperclip`. Record the resolved digest and
+retain the previous digest and database backup for recovery.
 
 Record the digest, source SHA, tag, CI run, and Astra decision in the private
 operations handoff. Deployment is a separate operator-approved step using the
