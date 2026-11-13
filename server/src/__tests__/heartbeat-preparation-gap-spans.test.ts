@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout } from "node:timers/promises";
 import { context, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from "@opentelemetry/sdk-trace";
@@ -7,6 +8,7 @@ import { agents, authUsers, companyMemberships, createDb, heartbeatRuns, issueCo
 import type { NativeRunIdentity, NativeSession, NativeSessionBackend, PrpEvent } from "@paperclipai/paperclip-runner";
 import { describe, expect, it, vi } from "vitest";
 import { heartbeatService, type HeartbeatServiceOptions } from "../services/heartbeat.js";
+import * as durableChatWakeup from "../services/durable-chat-wakeup.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { closeIdleWarmNativeSessionsForRestart } from "../services/native-runtime/native-session-executor.js";
 import { nativeRestartFixture, waitForCondition } from "./helpers/native-restart-fixture.js";
@@ -76,6 +78,18 @@ describe.skipIf(!support.supported)("heartbeat preparation gap spans", () => {
     const provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
     expect(context.setGlobalContextManager(manager)).toBe(true);
     expect(trace.setGlobalTracerProvider(provider)).toBe(true);
+    // Slow preparation is also replayed into the native lifecycle trace once it
+    // crosses the run-log threshold. Exercise both producers on every run.
+    const authorizeRetry = durableChatWakeup.authorizeFailedChatRunRetryWake;
+    let delayedAdmission = false;
+    const admission = vi.spyOn(durableChatWakeup, "authorizeFailedChatRunRetryWake").mockImplementation(async (...args) => {
+      const result = await authorizeRetry(...args);
+      if (args[2].phase === "execution" && !delayedAdmission) {
+        delayedAdmission = true;
+        await setTimeout(75);
+      }
+      return result;
+    });
     const heartbeat = heartbeatService(db, { nativeSessionBackendFactory: completingBackend(db) });
     try {
       const userId = randomUUID();
@@ -99,9 +113,9 @@ describe.skipIf(!support.supported)("heartbeat preparation gap spans", () => {
       expect((await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, run!.id)))[0])
         .toMatchObject({ status: "succeeded" });
 
+      expect(delayedAdmission).toBe(true);
       await provider.forceFlush();
       const spans = exporter.getFinishedSpans();
-      const names = new Set(spans.map(span => span.name));
       const preparation = [
         "heartbeat.prepare.chat_retry_admission",
         "heartbeat.prepare.workspace_selection",
@@ -119,13 +133,29 @@ describe.skipIf(!support.supported)("heartbeat preparation gap spans", () => {
         "native.controller.span_persistence",
         "native.controller.state_migration",
       ];
-      for (const name of [...preparation, ...controller]) expect(names, name).toContain(name);
+      const livePreparation = spans.filter(span => span.instrumentationScope.name === "paperclip.heartbeat-preparation");
+      const liveController = spans.filter(span => span.instrumentationScope.name === "paperclip.native-controller");
+      for (const name of preparation) expect(livePreparation.map(span => span.name), name).toContain(name);
+      for (const name of controller) expect(liveController.map(span => span.name), name).toContain(name);
       const attempts = spans.filter(span => span.name === "task.execution_attempt");
       expect(attempts).toHaveLength(1);
-      for (const span of spans.filter(span => preparation.includes(span.name))) {
+      for (const span of livePreparation.filter(span => preparation.includes(span.name))) {
         expect(span.parentSpanContext?.spanId, span.name).toBe(attempts[0]!.spanContext().spanId);
+        expect(span.spanContext().traceId, span.name).toBe(attempts[0]!.spanContext().traceId);
+      }
+      // Historical copies have the same names but belong to the native lifecycle,
+      // whose preparation parent is task.prepare rather than the live attempt.
+      const nativeSpans = spans.filter(span => span.instrumentationScope.name === "paperclip.native-runner");
+      const taskPreparation = nativeSpans.filter(span => span.name === "task.prepare");
+      expect(taskPreparation).toHaveLength(1);
+      const recordedPreparation = nativeSpans.filter(span => preparation.includes(span.name));
+      expect(recordedPreparation.map(span => span.name)).toContain("heartbeat.prepare.chat_retry_admission");
+      for (const span of recordedPreparation) {
+        expect(span.parentSpanContext?.spanId, span.name).toBe(taskPreparation[0]!.spanContext().spanId);
+        expect(span.spanContext().traceId, span.name).toBe(taskPreparation[0]!.spanContext().traceId);
       }
     } finally {
+      admission.mockRestore();
       await heartbeat.drainActiveRunExecutions();
       await closeIdleWarmNativeSessionsForRestart();
       await db.$client.end();
